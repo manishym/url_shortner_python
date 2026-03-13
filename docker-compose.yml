@@ -58,7 +58,7 @@ services:
       PURGE_TOPIC: url-purge-events
       LRU_MAX_SIZE: "10000"
     ports:
-      - "8001:8000"
+      - "8080:8000"
     depends_on:
       redpanda:
         condition: service_healthy

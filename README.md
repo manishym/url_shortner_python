@@ -18,7 +18,7 @@ docker compose up --build
 ```
 
 - ID Service: http://localhost:8000 (GET `/generate` returns 64-bit integer)
-- URL Service: http://localhost:8001 — **Demo UI** at http://localhost:8001/ (POST `/shorten`, GET `/r/{path}`, DELETE `/r/{path}`)
+- URL Service: http://localhost:8080 — **Demo UI** at http://localhost:8080/ (POST `/shorten`, GET `/r/{path}`, DELETE `/r/{path}`)
 
 ## Environment
 
@@ -44,11 +44,33 @@ Logs are prefixed for filtering:
 
 ```bash
 # Shorten
-curl -X POST http://localhost:8001/shorten -H "Content-Type: application/json" -d '{"long_url": "https://example.com"}'
+curl -X POST http://localhost:8080/shorten -H "Content-Type: application/json" -d '{"long_url": "https://example.com"}'
 
 # Redirect
-curl -vL http://localhost:8001/r/abc1234
+curl -vL http://localhost:8080/r/abc1234
 
-# Delete (removes from DB and publishes purge event; all instances invalidate caches)
-curl -X DELETE http://localhost:8001/r/abc1234
+# Delete (produces purge event; consumers remove from DB, Redis, LRU)
+curl -X DELETE http://localhost:8080/r/abc1234
+```
+
+## Testing (URL Service)
+
+Unit and integration tests use **pytest** with mocks for Kafka, Redis, Postgres, and the ID service. Target coverage is **>85%**.
+
+```bash
+cd url_service
+pip install -r requirements.txt -r requirements-dev.txt
+python -m pytest tests/ -v --cov=main --cov-report=term-missing --cov-fail-under=85
+```
+
+- **Unit tests** (`tests/test_unit.py`): Base62 encode/decode, LRUCache, `_redis_ttl`, `_short_path_from_message`.
+- **API tests** (`tests/test_api.py`): Shorten, redirect, delete with mocked DB, Redis, Kafka, and httpx.
+- **Service tests** (`tests/test_services.py`): `init_db`, `send_purge_event`, `ensure_purge_topic` with mocks.
+
+To run inside Docker (same Python as production, no Kafka/Redis/Postgres needed):
+
+```bash
+cd url_service
+docker build -t url-service-test -f Dockerfile.test .
+docker run --rm url-service-test
 ```
