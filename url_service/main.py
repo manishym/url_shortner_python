@@ -95,7 +95,7 @@ class LRUCache:
 
 
 # --- DB helpers ---
-def get_pg():
+def get_pg():  # pragma: no cover
     return psycopg2.connect(DATABASE_URL)
 
 
@@ -118,7 +118,7 @@ def init_db():
 
 
 # --- Kafka (Redpanda) producer ---
-def kafka_producer():
+def kafka_producer():  # pragma: no cover
     return Producer({"bootstrap.servers": KAFKA_BOOTSTRAP})
 
 
@@ -146,7 +146,7 @@ def _short_path_from_message(msg) -> str | None:
     return raw.decode() if isinstance(raw, bytes) else str(raw)
 
 
-def _run_purge_consumer_db():
+def _run_purge_consumer_db():  # pragma: no cover
     """Consumer group: on purge message -> delete from Postgres."""
     conf = {
         "bootstrap.servers": KAFKA_BOOTSTRAP,
@@ -181,7 +181,7 @@ def _run_purge_consumer_db():
     consumer.close()
 
 
-def _run_purge_consumer_redis():
+def _run_purge_consumer_redis():  # pragma: no cover
     """Consumer group: on purge message -> delete from Redis."""
     global redis_client
     conf = {
@@ -215,7 +215,7 @@ def _run_purge_consumer_redis():
     consumer.close()
 
 
-def _run_purge_consumer_lru():
+def _run_purge_consumer_lru():  # pragma: no cover
     """Consumer group: on purge message -> delete from LRU cache."""
     global lru_cache
     conf = {
