@@ -2,7 +2,7 @@
 URL Shortener Microservice.
 Shorten: ID service -> Base62 -> Postgres + Redis.
 Redirect: Local LRU -> Redis -> Postgres (cache-aside).
-Delete: Postgres + Redpanda purge event; consumer invalidates Local LRU + Redis.
+Delete: produce purge event to Kafka only; three consumer groups (DB, Redis, LRU) each delete from their store for consistent eventual state.
 """
 import logging
 import os
@@ -135,39 +135,114 @@ def send_purge_event(short_path: str) -> None:
 # --- Globals (set in lifespan) ---
 redis_client: Redis | None = None
 lru_cache: LRUCache | None = None
-consumer_thread: threading.Thread | None = None
+consumer_threads: list[threading.Thread] = []
 consumer_stop = threading.Event()
 
 
-def run_purge_consumer():
-    """Background consumer: on purge message -> invalidate LRU + Redis."""
-    global lru_cache, redis_client
+def _short_path_from_message(msg) -> str | None:
+    raw = msg.value() if msg.value() else msg.key() if msg.key() else None
+    if raw is None:
+        return None
+    return raw.decode() if isinstance(raw, bytes) else str(raw)
+
+
+def _run_purge_consumer_db():
+    """Consumer group: on purge message -> delete from Postgres."""
     conf = {
         "bootstrap.servers": KAFKA_BOOTSTRAP,
-        "group.id": "url-shortener-purge-consumer",
+        "group.id": "url-shortener-purge-db",
         "auto.offset.reset": "earliest",
     }
     consumer = Consumer(conf)
     consumer.subscribe([PURGE_TOPIC])
-    logger.info("%s Purge consumer started, topic=%s", LOG_PREFIX, PURGE_TOPIC)
+    logger.info("%s Purge consumer (DB) started, topic=%s", LOG_PREFIX, PURGE_TOPIC)
     while not consumer_stop.is_set():
         msg = consumer.poll(timeout=1.0)
         if msg is None:
             continue
         if msg.error():
-            logger.warning("%s Consumer error: %s", LOG_PREFIX, msg.error())
+            logger.warning("%s Purge DB consumer error: %s", LOG_PREFIX, msg.error())
             continue
-        key = msg.value().decode() if msg.value() else msg.key().decode() if msg.key() else None
+        key = _short_path_from_message(msg)
         if not key:
             continue
-        logger.info("%s Purging Cache for Key: %s", LOG_PREFIX, key)
-        if lru_cache:
-            lru_cache.delete(key)
+        try:
+            with get_pg() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM short_urls WHERE short_path = %s", (key,))
+                    conn.commit()
+            logger.info("%s Purge DB deleted: %s", LOG_PREFIX, key)
+            try:
+                consumer.commit(message=msg)
+            except Exception as ce:
+                logger.warning("%s Purge DB commit failed for %s: %s", LOG_PREFIX, key, ce)
+        except Exception as e:
+            logger.warning("%s Purge DB delete failed for %s: %s", LOG_PREFIX, key, e)
+    consumer.close()
+
+
+def _run_purge_consumer_redis():
+    """Consumer group: on purge message -> delete from Redis."""
+    global redis_client
+    conf = {
+        "bootstrap.servers": KAFKA_BOOTSTRAP,
+        "group.id": "url-shortener-purge-redis",
+        "auto.offset.reset": "earliest",
+    }
+    consumer = Consumer(conf)
+    consumer.subscribe([PURGE_TOPIC])
+    logger.info("%s Purge consumer (Redis) started, topic=%s", LOG_PREFIX, PURGE_TOPIC)
+    while not consumer_stop.is_set():
+        msg = consumer.poll(timeout=1.0)
+        if msg is None:
+            continue
+        if msg.error():
+            logger.warning("%s Purge Redis consumer error: %s", LOG_PREFIX, msg.error())
+            continue
+        key = _short_path_from_message(msg)
+        if not key:
+            continue
         if redis_client:
             try:
                 redis_client.delete(key)
+                logger.info("%s Purge Redis deleted: %s", LOG_PREFIX, key)
+                try:
+                    consumer.commit(message=msg)
+                except Exception as ce:
+                    logger.warning("%s Purge Redis commit failed for %s: %s", LOG_PREFIX, key, ce)
             except Exception as e:
-                logger.warning("%s Redis delete failed for %s: %s", LOG_PREFIX, key, e)
+                logger.warning("%s Purge Redis delete failed for %s: %s", LOG_PREFIX, key, e)
+    consumer.close()
+
+
+def _run_purge_consumer_lru():
+    """Consumer group: on purge message -> delete from LRU cache."""
+    global lru_cache
+    conf = {
+        "bootstrap.servers": KAFKA_BOOTSTRAP,
+        "group.id": "url-shortener-purge-lru",
+        "auto.offset.reset": "earliest",
+    }
+    consumer = Consumer(conf)
+    consumer.subscribe([PURGE_TOPIC])
+    logger.info("%s Purge consumer (LRU) started, topic=%s", LOG_PREFIX, PURGE_TOPIC)
+    while not consumer_stop.is_set():
+        msg = consumer.poll(timeout=1.0)
+        if msg is None:
+            continue
+        if msg.error():
+            logger.warning("%s Purge LRU consumer error: %s", LOG_PREFIX, msg.error())
+            continue
+        key = _short_path_from_message(msg)
+        if not key:
+            continue
+        if lru_cache:
+            lru_cache.delete(key)
+            logger.info("%s Purge LRU deleted: %s", LOG_PREFIX, key)
+            try:
+                consumer.commit(message=msg)
+            except Exception as ce:
+                logger.warning("%s Purge LRU commit failed for %s: %s", LOG_PREFIX, key, ce)
     consumer.close()
 
 
@@ -183,17 +258,22 @@ def ensure_purge_topic():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global redis_client, lru_cache, consumer_thread
+    global redis_client, lru_cache, consumer_threads
     init_db()
     redis_client = Redis.from_url(REDIS_URL)
     lru_cache = LRUCache(LRU_MAX_SIZE)
     ensure_purge_topic()
-    consumer_thread = threading.Thread(target=run_purge_consumer, daemon=True)
-    consumer_thread.start()
+    consumer_threads = [
+        threading.Thread(target=_run_purge_consumer_db, daemon=True),
+        threading.Thread(target=_run_purge_consumer_redis, daemon=True),
+        threading.Thread(target=_run_purge_consumer_lru, daemon=True),
+    ]
+    for t in consumer_threads:
+        t.start()
     yield
     consumer_stop.set()
-    if consumer_thread:
-        consumer_thread.join(timeout=5)
+    for t in consumer_threads:
+        t.join(timeout=5)
 
 
 app = FastAPI(title="URL Shortener", version="1.0.0", lifespan=lifespan)
@@ -318,22 +398,12 @@ def redirect(short_path: str):
 
 @app.delete("/r/{short_path}")
 def delete_short_url(short_path: str):
-    """Remove from Postgres and produce purge event to Redpanda."""
+    """Produce purge event to Kafka only; three consumer groups (DB, Redis, LRU) perform the deletes."""
     with get_pg() as conn:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM short_urls WHERE short_path = %s RETURNING short_path", (short_path,))
-            deleted = cur.rowcount
-            conn.commit()
-    if deleted == 0:
-        raise HTTPException(status_code=404, detail="Short URL not found")
-    logger.info("%s Deleted from DB: %s", LOG_PREFIX, short_path)
-    # Invalidate local + Redis via consumer (we could also invalidate locally here for consistency)
-    if lru_cache:
-        lru_cache.delete(short_path)
-    if redis_client:
-        try:
-            redis_client.delete(short_path)
-        except Exception as e:
-            logger.warning("%s Redis delete failed: %s", LOG_PREFIX, e)
+            cur.execute("SELECT 1 FROM short_urls WHERE short_path = %s", (short_path,))
+            if cur.fetchone() is None:
+                raise HTTPException(status_code=404, detail="Short URL not found")
     send_purge_event(short_path)
-    return {"ok": True, "short_path": short_path}
+    logger.info("%s Purge event produced for: %s", LOG_PREFIX, short_path)
+    return {"ok": True, "short_path": short_path, "message": "Purge event sent; DB, Redis, and LRU will be updated by consumers"}
