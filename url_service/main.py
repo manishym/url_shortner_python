@@ -9,6 +9,7 @@ import os
 import threading
 from collections import OrderedDict
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone, timedelta
 
 import httpx
 import psycopg2
@@ -39,6 +40,7 @@ REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
 KAFKA_BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP", "redpanda:9092")
 PURGE_TOPIC = os.environ.get("PURGE_TOPIC", "url-purge-events")
 LRU_MAX_SIZE = int(os.environ.get("LRU_MAX_SIZE", "10_000"))
+REDIS_DEFAULT_TTL = 300  # 5 minutes
 BASE62_CHARS = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
@@ -104,8 +106,12 @@ def init_db():
                 CREATE TABLE IF NOT EXISTS short_urls (
                     short_path VARCHAR(32) PRIMARY KEY,
                     long_url TEXT NOT NULL,
-                    created_at TIMESTAMPTZ DEFAULT NOW()
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    expires_at TIMESTAMPTZ
                 )
+            """)
+            cur.execute("""
+                ALTER TABLE short_urls ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ
             """)
             conn.commit()
     logger.info("%s Postgres schema initialized", LOG_PREFIX)
@@ -201,21 +207,30 @@ def index():
     """Serve the demo frontend."""
     index_file = _STATIC_DIR / "index.html"
     if index_file.exists():
-        return FileResponse(index_file)
+        return FileResponse(index_file, headers={"Cache-Control": "no-store, max-age=0"})
     return {"service": "URL Shortener", "docs": "/docs"}
 
 
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 
+def _redis_ttl(expires_in_seconds: int | None) -> int:
+    """Redis TTL: 5 min default; if URL expiry is set and less than 5 min, use it."""
+    if expires_in_seconds is None:
+        return REDIS_DEFAULT_TTL
+    return min(REDIS_DEFAULT_TTL, max(1, expires_in_seconds))
+
+
 class ShortenRequest(BaseModel):
     long_url: HttpUrl
+    expires_in_seconds: int | None = None  # optional; URL becomes invalid after this many seconds
 
 
 @app.post("/shorten")
 def shorten(body: ShortenRequest):
     """Call ID service, Base62 encode, save to Postgres, cache in Redis."""
     long_url = str(body.long_url)
+    expires_in = body.expires_in_seconds
     try:
         with httpx.Client(timeout=5.0) as client:
             r = client.get(f"{ID_SERVICE_URL.rstrip('/')}/generate")
@@ -230,25 +245,27 @@ def shorten(body: ShortenRequest):
         raise HTTPException(status_code=503, detail="ID service unavailable") from e
 
     short_path = encode_base62(snowflake_id)
+    expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)) if expires_in else None
     logger.info("%s Shorten: id=%s -> path=%s -> %s", LOG_PREFIX, snowflake_id, short_path, long_url)
 
     with get_pg() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO short_urls (short_path, long_url) VALUES (%s, %s) ON CONFLICT (short_path) DO NOTHING",
-                (short_path, long_url),
+                "INSERT INTO short_urls (short_path, long_url, expires_at) VALUES (%s, %s, %s) ON CONFLICT (short_path) DO NOTHING",
+                (short_path, long_url, expires_at),
             )
             conn.commit()
 
+    ttl = _redis_ttl(expires_in)
     if redis_client:
         try:
-            redis_client.setex(short_path, 86400 * 7, long_url)  # 7 days TTL
+            redis_client.setex(short_path, ttl, long_url)
         except Exception as e:
             logger.warning("%s Redis set failed: %s", LOG_PREFIX, e)
-    if lru_cache:
+    if lru_cache and expires_in is None:
         lru_cache.set(short_path, long_url)
 
-    return {"short_path": short_path, "short_url": f"/r/{short_path}", "long_url": long_url}
+    return {"short_path": short_path, "short_url": f"/r/{short_path}", "long_url": long_url, "expires_in_seconds": expires_in}
 
 
 @app.get("/r/{short_path}")
@@ -277,17 +294,23 @@ def redirect(short_path: str):
     # 3. Postgres
     with get_pg() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT long_url FROM short_urls WHERE short_path = %s", (short_path,))
+            cur.execute("SELECT long_url, expires_at FROM short_urls WHERE short_path = %s", (short_path,))
             row = cur.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Short URL not found")
-    long_url = row[0]
+    long_url, expires_at = row[0], row[1]
+    if expires_at and datetime.now(timezone.utc) >= expires_at:
+        raise HTTPException(status_code=404, detail="Short URL has expired")
     logger.info("%s Redirect DB hit: %s", LOG_PREFIX, short_path)
-    if lru_cache:
+    if expires_at:
+        ttl = min(REDIS_DEFAULT_TTL, max(1, int((expires_at - datetime.now(timezone.utc)).total_seconds())))
+    else:
+        ttl = REDIS_DEFAULT_TTL
+    if lru_cache and expires_at is None:
         lru_cache.set(short_path, long_url)
     if redis_client:
         try:
-            redis_client.setex(short_path, 86400 * 7, long_url)
+            redis_client.setex(short_path, ttl, long_url)
         except Exception as e:
             logger.warning("%s Redis setex failed: %s", LOG_PREFIX, e)
     return RedirectResponse(url=long_url, status_code=302)

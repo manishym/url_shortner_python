@@ -69,7 +69,8 @@
       color: var(--text-muted);
     }
     input[type="url"],
-    input[type="text"] {
+    input[type="text"],
+    input[type="number"] {
       width: 100%;
       padding: 0.75rem 1rem;
       font-family: "JetBrains Mono", monospace;
@@ -145,6 +146,11 @@
     }
     .message.error { color: var(--danger); }
     .message.success { color: var(--success); }
+    .field-hint {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin: -0.5rem 0 1rem 0;
+    }
     .hidden { display: none !important; }
     footer {
       margin-top: 2rem;
@@ -163,6 +169,9 @@
       <h2>Shorten a URL</h2>
       <label for="long-url">Paste your long URL</label>
       <input type="url" id="long-url" placeholder="https://example.com/very/long/path" />
+      <label for="expires-in">Expiry (optional)</label>
+      <input type="number" id="expires-in" placeholder="Seconds until link expires (e.g. 60, 300); leave empty for no expiry" min="1" aria-describedby="expires-hint" />
+      <p id="expires-hint" class="field-hint">Leave empty for no expiry. If set, link stops working after this many seconds (max cache 5 min).</p>
       <button type="button" class="btn-primary" id="shorten-btn">Shorten</button>
       <div id="shorten-message" class="message hidden"></div>
       <div id="shorten-result" class="result hidden">
@@ -215,11 +224,17 @@
       const btn = document.getElementById('shorten-btn');
       btn.disabled = true;
       btn.textContent = 'Shortening…';
+      const expiresVal = document.getElementById('expires-in').value.trim();
+      const body = { long_url: url };
+      if (expiresVal) {
+        const sec = parseInt(expiresVal, 10);
+        if (!isNaN(sec) && sec > 0) body.expires_in_seconds = sec;
+      }
       try {
         const res = await fetch(base + '/shorten', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ long_url: url }),
+          body: JSON.stringify(body),
         });
         const data = await res.json();
         if (!res.ok) {
