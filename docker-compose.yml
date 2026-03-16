@@ -48,20 +48,17 @@ services:
       retries: 3
       start_period: 5s
 
-  url-service:
-    build: ./url_service
+  shortener-service:
+    build:
+      context: .
+      dockerfile: shortener_service/Dockerfile
     environment:
       ID_SERVICE_URL: http://id-service:8000
       DATABASE_URL: postgresql://shortener:shortener@postgres:5432/shortener
       REDIS_URL: redis://redis:6379/0
-      KAFKA_BOOTSTRAP: redpanda:9092
-      PURGE_TOPIC: url-purge-events
-      LRU_MAX_SIZE: "10000"
     ports:
-      - "8080:8000"
+      - "8001:8000"
     depends_on:
-      redpanda:
-        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
@@ -69,8 +66,76 @@ services:
       id-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/docs')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 15s
+      retries: 3
+      start_period: 5s
+
+  redirection-service:
+    build:
+      context: .
+      dockerfile: redirection_service/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://shortener:shortener@postgres:5432/shortener
+      REDIS_URL: redis://redis:6379/0
+      KAFKA_BOOTSTRAP: redpanda:9092
+      PURGE_TOPIC: url-purge-events
+      LRU_MAX_SIZE: "10000"
+    ports:
+      - "8002:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  deletion-service:
+    build:
+      context: .
+      dockerfile: deletion_service/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://shortener:shortener@postgres:5432/shortener
+      REDIS_URL: redis://redis:6379/0
+      KAFKA_BOOTSTRAP: redpanda:9092
+      PURGE_TOPIC: url-purge-events
+    ports:
+      - "8003:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  gateway:
+    image: nginx:alpine
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./gateway/static:/usr/share/nginx/html:ro
+    ports:
+      - "8080:80"
+    depends_on:
+      - shortener-service
+      - redirection-service
+      - deletion-service
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3

@@ -5,45 +5,61 @@ Microservice-based URL shortener with Snowflake ID generation, multi-tier cache-
 ## Architecture
 
 - **ID Service**: Standalone FastAPI service that generates 64-bit Snowflake IDs. Uses `WORKER_ID` from environment; includes clock drift protection.
-- **URL Service**: Shorten (ID service → Base62 → Postgres + Redis), Redirect (LRU → Redis → Postgres), Delete (Postgres + Redpanda purge event). Background consumer invalidates Local LRU and Redis on purge events.
+- **Shortener Service**: Handles URL shortening - calls ID service, Base62 encodes, stores in Postgres + Redis.
+- **Redirection Service**: Handles redirects (GET /r/{path}) with multi-tier cache (LRU → Redis → Postgres). Background consumer invalidates LRU on purge events.
+- **Deletion Service**: Handles URL deletion (DELETE /r/{path}) - produces Kafka purge event. Background consumers delete from Postgres and Redis.
+- **Gateway (nginx)**: API gateway routing requests to appropriate services based on path and HTTP method.
 - **Redpanda**: Single-node Kafka-compatible broker for `url-purge-events` topic.
 - **Postgres**: Persistent store for short_path → long_url.
-- **Redis**: Distributed cache (7-day TTL).
+- **Redis**: Distributed cache (5-minute TTL).
 
 ## Run with Docker Compose
 
 ```bash
-cd url_shortener
 docker compose up --build
 ```
 
-- ID Service: http://localhost:8000 (GET `/generate` returns 64-bit integer)
-- URL Service: http://localhost:8080 — **Demo UI** at http://localhost:8080/ (POST `/shorten`, GET `/r/{path}`, DELETE `/r/{path}`)
+- **Gateway** (main entry): http://localhost:8080 — **Demo UI** at http://localhost:8080/
+- **ID Service**: http://localhost:8000 (GET `/generate` returns 64-bit integer)
+- **Shortener Service**: http://localhost:8001 (internal: shortener-service:8000)
+- **Redirection Service**: http://localhost:8002 (internal: redirection-service:8000)
+- **Deletion Service**: http://localhost:8003 (internal: deletion-service:8000)
+
+## API Endpoints
+
+| Method | Path | Service | Description |
+|--------|------|---------|-------------|
+| POST | /shorten | Shortener | Create short URL |
+| GET | /r/{path} | Redirection | Redirect to long URL |
+| DELETE | /r/{path} | Deletion | Delete short URL |
+| GET | /health | All | Health check |
 
 ## Environment
 
-| Service       | Variable         | Default                          |
-|---------------|------------------|----------------------------------|
-| ID Service    | `WORKER_ID`      | `0` (required in production)    |
-| ID Service    | `EPOCH_MS`       | `1739980800000`                  |
-| URL Service   | `ID_SERVICE_URL` | `http://id-service:8000`         |
-| URL Service   | `DATABASE_URL`   | postgresql://...@postgres/...    |
-| URL Service   | `REDIS_URL`      | redis://redis:6379/0             |
-| URL Service   | `KAFKA_BOOTSTRAP`| redpanda:9092                    |
-| URL Service   | `PURGE_TOPIC`    | url-purge-events                 |
-| URL Service   | `LRU_MAX_SIZE`   | 10000                            |
+| Service | Variable | Default |
+|---------|----------|---------|
+| ID Service | `WORKER_ID` | `0` (required in production) |
+| ID Service | `EPOCH_MS` | `1739980800000` |
+| Shortener | `ID_SERVICE_URL` | `http://id-service:8000` |
+| Shortener/Redirection/Deletion | `DATABASE_URL` | `postgresql://shortener:shortener@postgres:5432/shortener` |
+| Shortener/Redirection/Deletion | `REDIS_URL` | `redis://redis:6379/0` |
+| Redirection/Deletion | `KAFKA_BOOTSTRAP` | `redpanda:9092` |
+| Redirection/Deletion | `PURGE_TOPIC` | `url-purge-events` |
+| Redirection | `LRU_MAX_SIZE` | `10000` |
 
 ## Observability
 
 Logs are prefixed for filtering:
 
-- **\[ID-SERVICE]** e.g. `Generated ID: 12345`, clock drift warnings/errors
-- **\[URL-SERVICE]** e.g. `Shorten: id=... -> path=...`, `Redirect cache hit (LRU): ...`, `Purging Cache for Key: ...`, `Produced purge event for key: ...`
+- **[ID-SERVICE]**: e.g. `Generated ID: 12345`, clock drift warnings/errors
+- **[SHORTENER-SERVICE]**: e.g. `Shorten: id=... -> path=...`
+- **[REDIRECTION-SERVICE]**: e.g. `Redirect cache hit (LRU): ...`, `Redirect cache hit (Redis): ...`, `Redirect DB hit: ...`
+- **[DELETION-SERVICE]**: e.g. `Purge event produced for: ...`, `DB deleted: ...`, `Redis deleted: ...`
 
 ## Example
 
 ```bash
-# Shorten
+# Shorten (through gateway)
 curl -X POST http://localhost:8080/shorten -H "Content-Type: application/json" -d '{"long_url": "https://example.com"}'
 
 # Redirect
@@ -53,24 +69,27 @@ curl -vL http://localhost:8080/r/abc1234
 curl -X DELETE http://localhost:8080/r/abc1234
 ```
 
-## Testing (URL Service)
+## Testing (Per Service)
 
 Unit and integration tests use **pytest** with mocks for Kafka, Redis, Postgres, and the ID service. Target coverage is **>85%**.
 
+### Shortener Service
 ```bash
-cd url_service
+cd shortener_service
 pip install -r requirements.txt -r requirements-dev.txt
-python -m pytest tests/ -v --cov=main --cov-report=term-missing --cov-fail-under=85
+PYTHONPATH=.. python -m pytest tests/ -v --cov=main --cov-report=term-missing --cov-fail-under=85
 ```
 
-- **Unit tests** (`tests/test_unit.py`): Base62 encode/decode, LRUCache, `_redis_ttl`, `_short_path_from_message`.
-- **API tests** (`tests/test_api.py`): Shorten, redirect, delete with mocked DB, Redis, Kafka, and httpx.
-- **Service tests** (`tests/test_services.py`): `init_db`, `send_purge_event`, `ensure_purge_topic` with mocks.
-
-To run inside Docker (same Python as production, no Kafka/Redis/Postgres needed):
-
+### Redirection Service
 ```bash
-cd url_service
-docker build -t url-service-test -f Dockerfile.test .
-docker run --rm url-service-test
+cd redirection_service
+pip install -r requirements.txt -r requirements-dev.txt
+PYTHONPATH=.. python -m pytest tests/ -v --cov=main --cov-report=term-missing --cov-fail-under=85
+```
+
+### Deletion Service
+```bash
+cd deletion_service
+pip install -r requirements.txt -r requirements-dev.txt
+PYTHONPATH=.. python -m pytest tests/ -v --cov=main --cov-report=term-missing --cov-fail-under=85
 ```
