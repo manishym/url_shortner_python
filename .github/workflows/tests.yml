@@ -16,10 +16,9 @@ jobs:
         with:
           python-version: '3.12'
           
-      - name: Install dependencies for shortener service
-        working-directory: shortener_service
+      - name: Install dependencies
         run: |
-          pip install -r requirements.txt -r requirements-dev.txt
+          pip install pytest pytest-cov httpx psycopg2-binary redis pydantic confluent-kafka fastapi
           
       - name: Run shortener service tests
         working-directory: shortener_service
@@ -27,25 +26,28 @@ jobs:
           PYTHONPATH: ..
         run: python -m pytest tests/ -v --cov=main --cov-report=term-missing --cov-fail-under=85
         
-      - name: Install dependencies for redirection service
-        working-directory: redirection_service
-        run: |
-          pip install -r requirements.txt -r requirements-dev.txt
-          
       - name: Run redirection service tests
         working-directory: redirection_service
         env:
           PYTHONPATH: ..
-        run: python -m pytest tests/ -v --cov=main --cov-report=term-missing
+        run: python -m pytest tests/ -v --cov=main --cov-report=term-missing --cov-fail-under=80
         
-      - name: Install dependencies for deletion service
-        working-directory: deletion_service
-        run: |
-          pip install -r requirements.txt -r requirements-dev.txt
-          
       - name: Run deletion service tests
         working-directory: deletion_service
         env:
           PYTHONPATH: ..
         run: python -m pytest tests/ -v --cov=main --cov-report=term-missing
-# test
+        
+      - name: Post coverage summary
+        if: always()
+        run: |
+          echo "## Test Coverage Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Shortener Service" >> $GITHUB_STEP_SUMMARY
+          cat shortener_service/.coverage 2>/dev/null || echo "No coverage data"
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Redirection Service" >> $GITHUB_STEP_SUMMARY
+          cat redirection_service/.coverage 2>/dev/null || echo "No coverage data"
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Deletion Service" >> $GITHUB_STEP_SUMMARY
+          cat deletion_service/.coverage 2>/dev/null || echo "No coverage data"

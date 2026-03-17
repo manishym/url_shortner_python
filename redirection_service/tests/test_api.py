@@ -71,9 +71,58 @@ class TestRedirect:
         ttl = mock_redis.setex.call_args[0][1]
         assert 1 <= ttl <= 300
 
+    def test_redirect_redis_setex_exception(self, client, mock_get_pg, mock_redis):
+        mock_redis.setex.side_effect = Exception("redis write failed")
+        conn, cursor = mock_get_pg
+        cursor.fetchone.return_value = (
+            "https://example.com",
+            None,
+        )
+        r = client.get("/r/newpath", follow_redirects=False)
+        assert r.status_code == 302
+        assert r.headers["location"] == "https://example.com"
+
+    def test_redirect_lru_cache_populates_on_db_hit(self, client, mock_get_pg, mock_redis, mock_lru_cache):
+        conn, cursor = mock_get_pg
+        cursor.fetchone.return_value = (
+            "https://db-with-lru.com",
+            None,
+        )
+        r = client.get("/r/lrupath", follow_redirects=False)
+        assert r.status_code == 302
+        mock_lru_cache.set.assert_called_once()
+
 
 class TestHealth:
     def test_health_returns_ok(self, client):
         r = client.get("/health")
         assert r.status_code == 200
         assert r.json() == {"status": "ok", "service": "redirection"}
+
+
+class TestLRUCache:
+    def test_cache_set_and_get(self):
+        from main import LRUCache
+        cache = LRUCache(max_size=3)
+        cache.set("a", "value_a")
+        assert cache.get("a") == "value_a"
+
+    def test_cache_miss(self):
+        from main import LRUCache
+        cache = LRUCache(max_size=3)
+        assert cache.get("nonexistent") is None
+
+    def test_cache_eviction(self):
+        from main import LRUCache
+        cache = LRUCache(max_size=2)
+        cache.set("a", "value_a")
+        cache.set("b", "value_b")
+        cache.set("c", "value_c")
+        assert cache.get("a") is None
+
+    def test_cache_delete(self):
+        from main import LRUCache
+        cache = LRUCache(max_size=3)
+        cache.set("a", "value_a")
+        cache.delete("a")
+        assert cache.get("a") is None
