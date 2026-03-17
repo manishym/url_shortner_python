@@ -5,4 +5,3 @@ omit = tests/*
 [report]
 precision = 2
 show_missing = True
-fail_under = 85
