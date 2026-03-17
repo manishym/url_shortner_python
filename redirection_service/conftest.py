@@ -46,7 +46,12 @@ def mock_redis():
 
 @pytest.fixture
 def mock_lru_cache():
-    return MagicMock()
+    m = MagicMock()
+    # IMPORTANT: lru_cache.get must return None by default to avoid infinite redirects
+    m.get.return_value = None
+    m.set.return_value = None
+    m.delete.return_value = None
+    return m
 
 
 @pytest.fixture
@@ -60,13 +65,15 @@ def noop_consumer():
 
 @pytest.fixture
 def client(mock_get_pg, mock_redis, mock_lru_cache, noop_consumer):
-    with patch("main.Redis.from_url", return_value=mock_redis), patch(
-        "main.db.init_db"
-    ), patch("main.LRUCache", return_value=mock_lru_cache):
-        from fastapi.testclient import TestClient
-        from main import app, lru_cache
-        # Inject mock lru_cache into module
+    """Create TestClient with proper Redis mock."""
+    with patch("main.db.init_db"), patch("main.LRUCache", return_value=mock_lru_cache):
         import main
         main.lru_cache = mock_lru_cache
-        with TestClient(app) as c:
-            yield c
+        # Patch Redis at import level
+        with patch("redis.Redis.from_url", return_value=mock_redis):
+            from fastapi.testclient import TestClient
+            from main import app
+            # Set the global redis_client to our mock
+            main.redis_client = mock_redis
+            with TestClient(app) as c:
+                yield c

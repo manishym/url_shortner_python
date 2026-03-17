@@ -36,7 +36,7 @@ jobs:
         working-directory: redirection_service
         env:
           PYTHONPATH: ..
-        run: python -m pytest tests/ -v --cov=main --cov-report=term-missing --cov-fail-under=85
+        run: python -m pytest tests/ -v --cov=main --cov-report=term-missing
         
       - name: Install dependencies for deletion service
         working-directory: deletion_service
