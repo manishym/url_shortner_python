@@ -20,7 +20,7 @@ def init_db():
                 )
             """)
             cur.execute("""
-                ALTER TABLE short_urls ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ
+                ALTER TABLE short_urls ADD COLUMN IF NOT EXISTS delete_key VARCHAR(32)
             """)
             conn.commit()
     logger.info("%s Postgres schema initialized", LOG_PREFIX)

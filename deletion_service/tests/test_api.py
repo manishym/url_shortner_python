@@ -7,12 +7,31 @@ import pytest
 
 
 class TestDelete:
-    def test_delete_produces_purge_event(
+    def test_delete_requires_delete_key(
         self, client, mock_get_pg, mock_kafka_producer
     ):
-        conn, cursor = mock_get_pg
-        cursor.fetchone.return_value = (1,)  # exists
+        """DELETE without delete_key should return 403."""
         r = client.delete("/r/abc1234")
+        assert r.status_code == 403
+        mock_kafka_producer.produce.assert_not_called()
+
+    def test_delete_invalid_delete_key(
+        self, client, mock_get_pg, mock_kafka_producer
+    ):
+        """DELETE with wrong delete_key should return 403."""
+        conn, cursor = mock_get_pg
+        cursor.fetchone.return_value = ("valid_key",)  # stored delete_key
+        r = client.delete("/r/abc1234?delete_key=wrong_key")
+        assert r.status_code == 403
+        mock_kafka_producer.produce.assert_not_called()
+
+    def test_delete_valid_delete_key(
+        self, client, mock_get_pg, mock_kafka_producer
+    ):
+        """DELETE with valid delete_key should return 200 and produce purge event."""
+        conn, cursor = mock_get_pg
+        cursor.fetchone.return_value = ("valid_key",)  # stored delete_key
+        r = client.delete("/r/abc1234?delete_key=valid_key")
         assert r.status_code == 200
         data = r.json()
         assert data["ok"] is True
@@ -23,9 +42,10 @@ class TestDelete:
         mock_kafka_producer.flush.assert_called_once()
 
     def test_delete_not_found(self, client, mock_get_pg, mock_kafka_producer):
+        """DELETE for non-existent short_path should return 404."""
         conn, cursor = mock_get_pg
         cursor.fetchone.return_value = None
-        r = client.delete("/r/nonexistent")
+        r = client.delete("/r/nonexistent?delete_key=any_key")
         assert r.status_code == 404
         mock_kafka_producer.produce.assert_not_called()
 

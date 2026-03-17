@@ -45,21 +45,8 @@ def mock_redis():
 
 
 @pytest.fixture
-def mock_id_service():
-    with patch("main.httpx.Client") as mock_client_cls:
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json.return_value = 1234567890123456789
-        mock_client = MagicMock()
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
-        mock_client.get.return_value = mock_response
-        mock_client_cls.return_value = mock_client
-        yield mock_client_cls
-
-
-@pytest.fixture
-def client(mock_get_pg, mock_redis, mock_id_service):
+def client(mock_get_pg, mock_redis):
+    """Create TestClient without patching httpx."""
     with patch("main.Redis.from_url", return_value=mock_redis), patch(
         "main.db.init_db"
     ):
@@ -67,3 +54,24 @@ def client(mock_get_pg, mock_redis, mock_id_service):
         from main import app
         with TestClient(app) as c:
             yield c
+
+
+@pytest.fixture
+def mock_id_service():
+    """Mock that returns a fixed ID for ID service calls.
+    
+    This fixture should be used alongside `client` fixture in tests that 
+    need to mock the ID service. It patches httpx.Client.
+    """
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = 1234567890123456789
+    
+    mock_client = MagicMock()
+    mock_client.__enter__ = MagicMock(return_value=mock_client)
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.get.return_value = mock_response
+    
+    # Patch httpx.Client globally - this will affect all imports of httpx
+    with patch("httpx.Client", return_value=mock_client):
+        yield mock_client

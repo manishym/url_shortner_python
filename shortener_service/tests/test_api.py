@@ -19,6 +19,8 @@ class TestShorten:
         assert data["long_url"] == "https://example.com/page"
         assert data["short_url"] == f"/r/{data['short_path']}"
         assert data.get("expires_in_seconds") is None
+        assert "delete_key" in data
+        assert len(data["delete_key"]) == 10
         cursor.execute.assert_called()
         mock_redis.setex.assert_called_once()
 
@@ -33,6 +35,7 @@ class TestShorten:
         assert r.status_code == 200
         data = r.json()
         assert data["expires_in_seconds"] == 120
+        assert "delete_key" in data
         mock_redis.setex.assert_called_once()
         call_args = mock_redis.setex.call_args[0]
         assert call_args[1] == 120

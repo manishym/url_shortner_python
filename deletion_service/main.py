@@ -6,7 +6,7 @@ import threading
 from contextlib import asynccontextmanager
 
 from confluent_kafka import Consumer
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from redis import Redis
 
@@ -119,13 +119,19 @@ app = FastAPI(title="URL Deletion Service", version="1.0.0", lifespan=lifespan)
 
 
 @app.delete("/r/{short_path}")
-def delete_short_url(short_path: str):
+def delete_short_url(short_path: str, delete_key: str | None = Query(None, description="Delete key required for deletion")):
     """Produce purge event to Kafka only; DB and Redis consumers perform the deletes."""
+    if delete_key is None:
+        raise HTTPException(status_code=403, detail="Delete key is required")
     with db.get_pg() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT 1 FROM short_urls WHERE short_path = %s", (short_path,))
-            if cur.fetchone() is None:
+            cur.execute("SELECT delete_key FROM short_urls WHERE short_path = %s", (short_path,))
+            row = cur.fetchone()
+            if row is None:
                 raise HTTPException(status_code=404, detail="Short URL not found")
+            stored_delete_key = row[0]
+            if stored_delete_key != delete_key:
+                raise HTTPException(status_code=403, detail="Invalid delete key")
     kafka_utils.send_purge_event(short_path)
     logger.info("%s Purge event produced for: %s", LOG_PREFIX, short_path)
     return {"ok": True, "short_path": short_path, "message": "Purge event sent; DB and Redis will be updated by consumers"}
