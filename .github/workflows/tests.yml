@@ -1,0 +1,50 @@
+name: Tests
+
+on:
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          
+      - name: Install dependencies for shortener service
+        working-directory: shortener_service
+        run: |
+          pip install -r requirements.txt -r requirements-dev.txt
+          
+      - name: Run shortener service tests
+        working-directory: shortener_service
+        env:
+          PYTHONPATH: ..
+        run: python -m pytest tests/ -v --cov=main --cov-report=term-missing --cov-fail-under=85
+        
+      - name: Install dependencies for redirection service
+        working-directory: redirection_service
+        run: |
+          pip install -r requirements.txt -r requirements-dev.txt
+          
+      - name: Run redirection service tests
+        working-directory: redirection_service
+        env:
+          PYTHONPATH: ..
+        run: python -m pytest tests/ -v --cov=main --cov-report=term-missing --cov-fail-under=85
+        
+      - name: Install dependencies for deletion service
+        working-directory: deletion_service
+        run: |
+          pip install -r requirements.txt -r requirements-dev.txt
+          
+      - name: Run deletion service tests
+        working-directory: deletion_service
+        env:
+          PYTHONPATH: ..
+        run: python -m pytest tests/ -v --cov=main --cov-report=term-missing
