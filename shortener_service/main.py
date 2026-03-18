@@ -20,19 +20,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[SHORTENER-SERVICE]"
 
-# --- Globals ---
-redis_client: Redis | None = None
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize DB and Redis on startup; close Redis on shutdown."""
-    global redis_client
     db.init_db()
-    redis_client = Redis.from_url(config.REDIS_URL)
+    app.state.redis = Redis.from_url(config.REDIS_URL)
     yield
-    if redis_client:
-        redis_client.close()
+    if app.state.redis:
+        app.state.redis.close()
 
 
 app = FastAPI(title="URL Shortener Service", version="1.0.0", lifespan=lifespan)
@@ -56,11 +52,11 @@ def _get_next_id() -> int:
     """
     try:
         with httpx.Client(timeout=5.0) as client:
-            r = client.get(
+            response = client.get(
                 f"{config.ID_SERVICE_URL.rstrip('/')}/generate"
             )
-        r.raise_for_status()
-        raw = r.json()
+        response.raise_for_status()
+        raw = response.json()
         if isinstance(raw, dict) and "error" in raw:
             raise HTTPException(
                 status_code=503,
@@ -75,6 +71,20 @@ def _get_next_id() -> int:
         raise HTTPException(
             status_code=503, detail="ID service unavailable"
         ) from e
+
+
+def _calculate_ttl(expires_in: int | None) -> int:
+    """Calculate Redis TTL based on expires_in seconds.
+
+    Args:
+        expires_in: Optional TTL in seconds
+
+    Returns:
+        int: The TTL to use for Redis, capped at REDIS_DEFAULT_TTL
+    """
+    if expires_in is None:
+        return config.REDIS_DEFAULT_TTL
+    return min(config.REDIS_DEFAULT_TTL, max(1, expires_in))
 
 
 @app.post("/shorten")
@@ -112,7 +122,8 @@ def shorten(body: ShortenRequest):
             )
             conn.commit()
 
-    ttl = config._redis_ttl(expires_in)
+    ttl = _calculate_ttl(expires_in)
+    redis_client = app.state.redis
     if redis_client:
         try:
             redis_client.setex(short_path, ttl, long_url)

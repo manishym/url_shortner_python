@@ -1,13 +1,15 @@
-"""
-API tests for shortener service.
-"""
-from unittest.mock import patch, MagicMock
+"""API tests for shortener service."""
+from unittest.mock import MagicMock, patch
+
 import redis.exceptions
 
 
 class TestShorten:
+    """Tests for the /shorten endpoint."""
+
     def test_shorten_creates_url(self, client, mock_get_pg, mock_redis, mock_id_service):
-        conn, cursor = mock_get_pg
+        """Test that shortening a URL creates it and caches in Redis."""
+        _, cursor = mock_get_pg
         r = client.post(
             "/shorten",
             json={"long_url": "https://example.com/page"},
@@ -23,7 +25,10 @@ class TestShorten:
         cursor.execute.assert_called()
         mock_redis.setex.assert_called_once()
 
-    def test_shorten_with_expiry(self, client, mock_get_pg, mock_redis, mock_id_service):
+    def test_shorten_with_expiry(
+        self, client, mock_redis, mock_id_service
+    ):
+        """Test shortening with explicit expiry time."""
         r = client.post(
             "/shorten",
             json={
@@ -39,7 +44,10 @@ class TestShorten:
         call_args = mock_redis.setex.call_args[0]
         assert call_args[1] == 120
 
-    def test_shorten_id_service_error(self, client, mock_get_pg, mock_id_service):
+    def test_shorten_id_service_error(
+        self, client, mock_id_service
+    ):
+        """Test that ID service errors return 503."""
         with patch("main.httpx.Client") as mock_client_cls:
             mock_response = MagicMock()
             mock_response.raise_for_status.side_effect = Exception("timeout")
@@ -54,7 +62,10 @@ class TestShorten:
             )
         assert r.status_code == 503
 
-    def test_shorten_id_service_returns_error_json(self, client, mock_get_pg, mock_id_service):
+    def test_shorten_id_service_returns_error_json(
+        self, client, mock_id_service
+    ):
+        """Test that ID service error JSON returns 503."""
         with patch("main.httpx.Client") as mock_client_cls:
             mock_response = MagicMock()
             mock_response.raise_for_status = MagicMock()
@@ -71,9 +82,12 @@ class TestShorten:
         assert r.status_code == 503
 
     def test_shorten_redis_setex_failure_does_not_fail_request(
-        self, client, mock_get_pg, mock_redis, mock_id_service
+        self, client, mock_redis, mock_id_service
     ):
-        mock_redis.setex.side_effect = redis.exceptions.RedisError("redis setex failed")
+        """Test that Redis failures don't cause request to fail."""
+        mock_redis.setex.side_effect = redis.exceptions.RedisError(
+            "redis setex failed"
+        )
         r = client.post(
             "/shorten",
             json={"long_url": "https://example.com/redis-fail"},
@@ -82,7 +96,10 @@ class TestShorten:
 
 
 class TestHealth:
+    """Tests for the /health endpoint."""
+
     def test_health_returns_ok(self, client):
+        """Test that health endpoint returns ok status."""
         r = client.get("/health")
         assert r.status_code == 200
         assert r.json() == {"status": "ok", "service": "shortener"}

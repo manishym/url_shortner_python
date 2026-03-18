@@ -22,12 +22,6 @@ logger = logging.getLogger(__name__)
 LOG_PREFIX = "[DELETION-SERVICE]"
 
 
-# --- Globals ---
-redis_client: Redis | None = None
-consumer_threads: list[threading.Thread] = []
-consumer_stop = threading.Event()
-
-
 def _purge_db_action(key: str) -> bool:
     """Delete *key* from Postgres.  Returns True on success (commit)."""
     try:
@@ -47,7 +41,7 @@ def _purge_db_action(key: str) -> bool:
         return False
 
 
-def _purge_redis_action(key: str) -> bool:
+def _purge_redis_action(redis_client: Redis | None, key: str) -> bool:
     """Delete *key* from Redis.  Returns True on success (commit)."""
     if not redis_client:
         return False
@@ -62,7 +56,7 @@ def _purge_redis_action(key: str) -> bool:
         return False
 
 
-def _run_purge_consumer_db():
+def _run_purge_consumer_db(consumer_stop: threading.Event):
     """Consumer group: on purge message -> delete from Postgres."""
     kafka_consumer.run_consumer(ConsumerConfig(
         group_id="url-deletion-purge-db",
@@ -74,12 +68,17 @@ def _run_purge_consumer_db():
     ))
 
 
-def _run_purge_consumer_redis():
+def _run_purge_consumer_redis(
+    consumer_stop: threading.Event, redis_client: Redis | None
+):
     """Consumer group: on purge message -> delete from Redis."""
+    def redis_callback(key: str) -> bool:
+        return _purge_redis_action(redis_client, key)
+
     kafka_consumer.run_consumer(ConsumerConfig(
         group_id="url-deletion-purge-redis",
         consumer_stop=consumer_stop,
-        action_callback=_purge_redis_action,
+        action_callback=redis_callback,
         log_prefix=LOG_PREFIX,
         consumer_label="Redis",
         logger=logger,
@@ -89,24 +88,31 @@ def _run_purge_consumer_redis():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize DB, Redis, Kafka topic, and start consumers."""
-    global redis_client, consumer_threads
     db.init_db()
-    redis_client = Redis.from_url(config.REDIS_URL)
+    app.state.redis = Redis.from_url(config.REDIS_URL)
+    app.state.consumer_stop = threading.Event()
     kafka_utils.ensure_purge_topic()
     consumer_threads = [
-        threading.Thread(target=_run_purge_consumer_db, daemon=True),
         threading.Thread(
-            target=_run_purge_consumer_redis, daemon=True,
+            target=_run_purge_consumer_db,
+            args=(app.state.consumer_stop,),
+            daemon=True,
+        ),
+        threading.Thread(
+            target=_run_purge_consumer_redis,
+            args=(app.state.consumer_stop, app.state.redis),
+            daemon=True,
         ),
     ]
-    for t in consumer_threads:
-        t.start()
+    for thread in consumer_threads:
+        thread.start()
+    app.state.consumer_threads = consumer_threads
     yield
-    consumer_stop.set()
-    for t in consumer_threads:
-        t.join(timeout=5)
-    if redis_client:
-        redis_client.close()
+    app.state.consumer_stop.set()
+    for thread in consumer_threads:
+        thread.join(timeout=5)
+    if app.state.redis:
+        app.state.redis.close()
 
 
 app = FastAPI(
