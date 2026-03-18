@@ -1,6 +1,7 @@
 """
 URL Deletion Service - Handles DELETE /r/{short_path}
 """
+import hmac
 import logging
 import threading
 from contextlib import asynccontextmanager
@@ -130,7 +131,7 @@ def delete_short_url(short_path: str, delete_key: str | None = Query(None, descr
             if row is None:
                 raise HTTPException(status_code=404, detail="Short URL not found")
             stored_delete_key = row[0]
-            if stored_delete_key != delete_key:
+            if not hmac.compare_digest(stored_delete_key, delete_key):
                 raise HTTPException(status_code=403, detail="Invalid delete key")
     kafka_utils.send_purge_event(short_path)
     logger.info("%s Purge event produced for: %s", LOG_PREFIX, short_path)
