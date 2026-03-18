@@ -42,37 +42,38 @@ class ShortenRequest(BaseModel):
     expires_in_seconds: int | None = None
 
 
+def _get_next_id() -> int:
+    """Call ID service to generate a unique snowflake ID.
+    
+    Returns:
+        int: The generated snowflake ID
+        
+    Raises:
+        HTTPException: 503 if ID service is unavailable or returns an error
+    """
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            r = client.get(f"{config.ID_SERVICE_URL.rstrip('/')}/generate")
+        r.raise_for_status()
+        raw = r.json()
+        if isinstance(raw, dict) and "error" in raw:
+            raise HTTPException(status_code=503, detail=raw.get("error", "ID service error"))
+        id_val = raw if isinstance(raw, int) else raw.get("id", raw)
+        return int(id_val)
+    except Exception as e:
+        logger.error("%s ID service call failed: %s", LOG_PREFIX, e)
+        raise HTTPException(status_code=503, detail="ID service unavailable") from e
+
+
 @app.post("/shorten")
 def shorten(body: ShortenRequest):
     """Call ID service, Base62 encode, save to Postgres, cache in Redis."""
     long_url = str(body.long_url)
     expires_in = body.expires_in_seconds
-    try:
-        with httpx.Client(timeout=5.0) as client:
-            r = client.get(f"{config.ID_SERVICE_URL.rstrip('/')}/generate")
-        r.raise_for_status()
-        raw = r.json()
-        if isinstance(raw, dict) and "error" in raw:
-            raise HTTPException(status_code=503, detail=raw.get("error", "ID service error"))
-        id_val = raw if isinstance(raw, int) else raw.get("id", raw)
-        snowflake_id = int(id_val)
-    except Exception as e:
-        logger.error("%s ID service call failed: %s", LOG_PREFIX, e)
-        raise HTTPException(status_code=503, detail="ID service unavailable") from e
+    snowflake_id = _get_next_id()
 
     # Generate delete key (call ID service again for unique key)
-    try:
-        with httpx.Client(timeout=5.0) as client:
-            r = client.get(f"{config.ID_SERVICE_URL.rstrip('/')}/generate")
-        r.raise_for_status()
-        raw = r.json()
-        if isinstance(raw, dict) and "error" in raw:
-            raise HTTPException(status_code=503, detail=raw.get("error", "ID service error"))
-        id_val = raw if isinstance(raw, int) else raw.get("id", raw)
-        delete_key_id = int(id_val)
-    except Exception as e:
-        logger.error("%s ID service call for delete key failed: %s", LOG_PREFIX, e)
-        raise HTTPException(status_code=503, detail="ID service unavailable") from e
+    delete_key_id = _get_next_id()
 
     short_path = base62.encode_base62(snowflake_id)
     delete_key = base62.encode_base62(delete_key_id, length=10)
