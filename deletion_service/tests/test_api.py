@@ -1,9 +1,6 @@
 """
 API tests for deletion service.
 """
-from unittest.mock import MagicMock, patch
-
-import pytest
 
 
 class TestDelete:

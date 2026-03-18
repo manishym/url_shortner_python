@@ -1,11 +1,8 @@
 """
 API tests for redirection service.
 """
-import threading
 from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock, patch
-
-import pytest
 import redis.exceptions
 from confluent_kafka import KafkaException
 

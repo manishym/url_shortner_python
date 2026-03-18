@@ -2,8 +2,6 @@
 API tests for shortener service.
 """
 from unittest.mock import patch, MagicMock
-
-import pytest
 import redis.exceptions
 
 
