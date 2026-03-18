@@ -21,7 +21,7 @@ class TestShorten:
         assert data["short_url"] == f"/r/{data['short_path']}"
         assert data.get("expires_in_seconds") is None
         assert "delete_key" in data
-        assert len(data["delete_key"]) == 10
+        assert len(data["delete_key"]) == 32
         cursor.execute.assert_called()
         mock_redis.setex.assert_called_once()
 

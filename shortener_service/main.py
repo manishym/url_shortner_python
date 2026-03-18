@@ -2,6 +2,7 @@
 URL Shortener Service - Handles POST /shorten
 """
 import logging
+import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
@@ -94,11 +95,10 @@ def shorten(body: ShortenRequest):
     expires_in = body.expires_in_seconds
     snowflake_id = _get_next_id()
 
-    # Generate delete key (call ID service again for unique key)
-    delete_key_id = _get_next_id()
+    # Generate secure delete key
+    delete_key = secrets.token_urlsafe(24)
 
     short_path = base62.encode_base62(snowflake_id)
-    delete_key = base62.encode_base62(delete_key_id, length=10)
     expires_at = (
         datetime.now(timezone.utc) + timedelta(seconds=expires_in)
     ) if expires_in else None

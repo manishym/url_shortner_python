@@ -1,7 +1,7 @@
 """
 URL Deletion Service - Handles DELETE /r/{short_path}
 """
-import hmac
+import secrets
 import logging
 import threading
 from contextlib import asynccontextmanager
@@ -145,7 +145,7 @@ def delete_short_url(
                     status_code=404, detail="Short URL not found",
                 )
             stored_delete_key = row[0]
-            if not hmac.compare_digest(stored_delete_key, delete_key):
+            if stored_delete_key is None or not secrets.compare_digest(stored_delete_key, delete_key):
                 raise HTTPException(
                     status_code=403, detail="Invalid delete key",
                 )
