@@ -4,6 +4,7 @@ API tests for shortener service.
 from unittest.mock import patch, MagicMock
 
 import pytest
+import redis.exceptions
 
 
 class TestShorten:
@@ -74,7 +75,7 @@ class TestShorten:
     def test_shorten_redis_setex_failure_does_not_fail_request(
         self, client, mock_get_pg, mock_redis, mock_id_service
     ):
-        mock_redis.setex.side_effect = Exception("redis setex failed")
+        mock_redis.setex.side_effect = redis.exceptions.RedisError("redis setex failed")
         r = client.post(
             "/shorten",
             json={"long_url": "https://example.com/redis-fail"},

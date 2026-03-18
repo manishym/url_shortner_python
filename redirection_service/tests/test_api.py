@@ -6,6 +6,8 @@ from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
+import redis.exceptions
+from confluent_kafka import KafkaException
 
 
 class TestRedirect:
@@ -54,7 +56,7 @@ class TestRedirect:
         assert r.headers["location"] == "https://str-url.com"
 
     def test_redirect_redis_exception_falls_through_to_db(self, client, mock_get_pg, mock_redis):
-        mock_redis.get.side_effect = Exception("redis down")
+        mock_redis.get.side_effect = redis.exceptions.RedisError("redis down")
         conn, cursor = mock_get_pg
         cursor.fetchone.return_value = ("https://db-fallback.com", None)
         r = client.get("/r/fallback1", follow_redirects=False)
@@ -73,7 +75,7 @@ class TestRedirect:
         assert 1 <= ttl <= 300
 
     def test_redirect_redis_setex_exception(self, client, mock_get_pg, mock_redis):
-        mock_redis.setex.side_effect = Exception("redis write failed")
+        mock_redis.setex.side_effect = redis.exceptions.RedisError("redis write failed")
         conn, cursor = mock_get_pg
         cursor.fetchone.return_value = (
             "https://example.com",
@@ -201,7 +203,7 @@ class TestPurgeConsumer:
         main.consumer_stop.clear()
         main.lru_cache = cache
 
-        with patch("main.Consumer", return_value=mock_consumer):
+        with patch("shared.kafka_consumer.Consumer", return_value=mock_consumer):
             main._run_purge_consumer_lru()
 
         assert cache.get("abc123") is None
@@ -228,7 +230,7 @@ class TestPurgeConsumer:
         mock_consumer.poll.side_effect = poll_side_effect
 
         main.consumer_stop.clear()
-        with patch("main.Consumer", return_value=mock_consumer):
+        with patch("shared.kafka_consumer.Consumer", return_value=mock_consumer):
             main._run_purge_consumer_lru()
 
         mock_consumer.commit.assert_not_called()
@@ -254,7 +256,7 @@ class TestPurgeConsumer:
         mock_consumer.poll.side_effect = poll_side_effect
 
         main.consumer_stop.clear()
-        with patch("main.Consumer", return_value=mock_consumer):
+        with patch("shared.kafka_consumer.Consumer", return_value=mock_consumer):
             main._run_purge_consumer_lru()
 
         mock_consumer.commit.assert_not_called()
@@ -270,7 +272,7 @@ class TestPurgeConsumer:
 
         msg = self._make_msg(value=b"failkey")
         mock_consumer = MagicMock()
-        mock_consumer.commit.side_effect = Exception("commit error")
+        mock_consumer.commit.side_effect = KafkaException("commit error")
         call_count = 0
 
         def poll_side_effect(timeout=1.0):
@@ -287,7 +289,7 @@ class TestPurgeConsumer:
         main.consumer_stop.clear()
         main.lru_cache = cache
 
-        with patch("main.Consumer", return_value=mock_consumer):
+        with patch("shared.kafka_consumer.Consumer", return_value=mock_consumer):
             main._run_purge_consumer_lru()
 
         assert cache.get("failkey") is None
@@ -315,7 +317,7 @@ class TestPurgeConsumer:
         main.consumer_stop.clear()
         main.lru_cache = None
 
-        with patch("main.Consumer", return_value=mock_consumer):
+        with patch("shared.kafka_consumer.Consumer", return_value=mock_consumer):
             main._run_purge_consumer_lru()
 
         mock_consumer.commit.assert_not_called()

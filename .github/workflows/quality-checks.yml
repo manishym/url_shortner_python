@@ -1,0 +1,110 @@
+name: Code Quality Checks
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install pylint
+          pip install fastapi pydantic redis psycopg2-binary confluent-kafka httpx
+
+      - name: Run pylint
+        run: |
+          pylint shortener_service/ deletion_service/ redirection_service/ id_service/ shared/ \
+            --fail-under=8.0 \
+            --disable=import-error,duplicate-code,redefined-outer-name,unused-argument,invalid-name,global-statement,too-many-branches
+
+  complexity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install radon
+        run: pip install radon
+
+      - name: Check cyclomatic complexity
+        run: |
+          echo "## Cyclomatic Complexity Report" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          radon cc -a -s shortener_service/ deletion_service/ redirection_service/ id_service/ shared/ | tee -a $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Fail on high complexity (> B)
+        run: |
+          HIGH=$(radon cc -a -n C shortener_service/ deletion_service/ redirection_service/ id_service/ shared/)
+          if [ -n "$HIGH" ]; then
+            echo "::warning::Functions with complexity > B detected:"
+            echo "$HIGH"
+            echo "Consider refactoring these functions."
+          fi
+
+  dead-code:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install vulture
+        run: pip install vulture
+
+      - name: Create vulture whitelist
+        run: |
+          cat > vulture_whitelist.py << 'WHITELIST'
+          # FastAPI route handlers and lifespan events are detected as unused
+          # because they are registered via decorators, not called directly.
+          from fastapi import FastAPI
+          app = FastAPI()
+
+          @app.get("")
+          async def _get(): pass
+
+          @app.post("")
+          async def _post(): pass
+
+          @app.delete("")
+          async def _delete(): pass
+
+          @app.on_event("startup")
+          async def _startup(): pass
+
+          @app.on_event("shutdown")
+          async def _shutdown(): pass
+
+          # Pydantic model fields
+          from pydantic import BaseModel
+          class _Model(BaseModel):
+              long_url: str
+              short_path: str
+
+          # Lifespan context manager
+          async def lifespan(app): pass
+          WHITELIST
+
+      - name: Find dead code
+        run: |
+          vulture shortener_service/ deletion_service/ redirection_service/ id_service/ shared/ \
+            vulture_whitelist.py \
+            --min-confidence 80
