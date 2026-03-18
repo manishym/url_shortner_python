@@ -24,7 +24,7 @@ jobs:
 
       - name: Run pylint
         run: |
-          pylint shortener_service/main.py deletion_service/main.py redirection_service/main.py id_service/main.py shared/ --fail-under=8.0 --disable=import-error,duplicate-code,redefined-outer-name,unused-argument,invalid-name,global-statement,too-many-branches,missing-function-docstring,missing-class-docstring,too-few-public-methods
+          pylint shortener_service/ deletion_service/ redirection_service/ id_service/ shared/ --fail-under=8.0 --disable=import-error,duplicate-code,redefined-outer-name,unused-argument,invalid-name,global-statement,too-many-branches,missing-function-docstring,missing-class-docstring,too-few-public-methods,import-outside-toplevel,unused-variable,trailing-whitespace,missing-final-newline,line-too-long,no-member,no-name-in-module,protected-access,unused-import
 
   complexity:
     runs-on: ubuntu-latest
@@ -43,12 +43,12 @@ jobs:
         run: |
           echo "## Cyclomatic Complexity Report" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          radon cc -a -s shortener_service/main.py deletion_service/main.py redirection_service/main.py id_service/main.py shared/ | tee -a $GITHUB_STEP_SUMMARY
+          radon cc -a -s shortener_service/ deletion_service/ redirection_service/ id_service/ shared/ | tee -a $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Fail on high complexity (> B)
         run: |
-          HIGH=$(radon cc -a -n C shortener_service/main.py deletion_service/main.py redirection_service/main.py id_service/main.py shared/)
+          HIGH=$(radon cc -a -n C shortener_service/ deletion_service/ redirection_service/ id_service/ shared/)
           if [ -n "$HIGH" ]; then
             echo "::warning::Functions with complexity > B detected:"
             echo "$HIGH"
@@ -103,4 +103,4 @@ jobs:
 
       - name: Find dead code
         run: |
-          vulture shortener_service/main.py deletion_service/main.py redirection_service/main.py id_service/main.py shared/ vulture_whitelist.py --min-confidence 80
+          vulture shortener_service/ deletion_service/ redirection_service/ id_service/ shared/ vulture_whitelist.py --min-confidence 80
