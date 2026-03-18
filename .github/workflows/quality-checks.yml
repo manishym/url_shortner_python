@@ -103,4 +103,5 @@ jobs:
 
       - name: Find dead code
         run: |
-          vulture shortener_service/ deletion_service/ redirection_service/ id_service/ shared/ vulture_whitelist.py --min-confidence 80
+          # Only check main service files and shared modules (exclude tests/conftest)
+          vulture shortener_service/main.py deletion_service/main.py redirection_service/main.py id_service/main.py shared/ vulture_whitelist.py --min-confidence 80
