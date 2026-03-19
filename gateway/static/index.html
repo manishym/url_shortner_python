@@ -211,6 +211,10 @@
       border: 1px solid rgba(255, 69, 58, 0.2);
       cursor: pointer;
       transition: var(--transition);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
     }
 
     .btn-danger:hover {
@@ -465,13 +469,17 @@
 
     function setBtnLoading(btnId, isLoading, text) {
       const btn = document.getElementById(btnId);
-      const span = btn.querySelector('span');
+      btn.disabled = isLoading;
+
+      const textSpan = document.createElement('span');
+      textSpan.textContent = text;
+
       if (isLoading) {
-        btn.disabled = true;
-        btn.innerHTML = '<div class="spinner"></div><span>' + text + '</span>';
+        const spinner = document.createElement('div');
+        spinner.className = 'spinner';
+        btn.replaceChildren(spinner, textSpan);
       } else {
-        btn.disabled = false;
-        btn.innerHTML = '<span>' + text + '</span>';
+        btn.replaceChildren(textSpan);
       }
     }
 
@@ -563,10 +571,7 @@
       }
       hideMessage('delete-message');
 
-      const btn = document.getElementById('delete-btn');
-      const origText = btn.textContent;
-      btn.disabled = true;
-      btn.textContent = 'Deleting...';
+      setBtnLoading('delete-btn', true, 'Deleting...');
 
       try {
         const res = await fetch(base + '/r/' + encodeURIComponent(path) + '?delete_key=' + encodeURIComponent(key), { method: 'DELETE' });
@@ -583,8 +588,7 @@
       } catch (e) {
         showMessage('delete-message', 'Network error: ' + e.message, 'error');
       } finally {
-        btn.disabled = false;
-        btn.textContent = origText;
+        setBtnLoading('delete-btn', false, 'Delete Link');
       }
     });
   </script>
