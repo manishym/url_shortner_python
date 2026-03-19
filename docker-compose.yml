@@ -27,9 +27,6 @@ services:
       timeout: 3s
       retries: 5
 
-volumes:
-  postgres_data:
-
   redis:
     image: redis:7-alpine
     ports:
@@ -144,3 +141,6 @@ volumes:
       interval: 10s
       timeout: 5s
       retries: 3
+
+volumes:
+  postgres_data:
