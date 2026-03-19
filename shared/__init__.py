@@ -19,19 +19,19 @@ def __getattr__(name):
         from shared.kafka_utils import kafka_producer
         globals()["kafka_producer"] = kafka_producer
         return kafka_producer
-    if name == "run_consumer":
+    elif name == "run_consumer":
         from shared.kafka_consumer import run_consumer
         globals()["run_consumer"] = run_consumer
         return run_consumer
-    if name == "ensure_purge_topic":
+    elif name == "ensure_purge_topic":
         from shared.kafka_utils import ensure_purge_topic
         globals()["ensure_purge_topic"] = ensure_purge_topic
         return ensure_purge_topic
-    if name == "send_purge_event":
+    elif name == "send_purge_event":
         from shared.kafka_utils import send_purge_event
         globals()["send_purge_event"] = send_purge_event
         return send_purge_event
-    if name == "_short_path_from_message":
+    elif name == "_short_path_from_message":
         from shared.kafka_utils import _short_path_from_message
         globals()["_short_path_from_message"] = _short_path_from_message
         return _short_path_from_message
