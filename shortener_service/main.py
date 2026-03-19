@@ -12,7 +12,9 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, HttpUrl
 from redis import Redis
 
-from shared import base62, config, db
+from shared import base62
+from shared import config
+from shared import db
 
 logging.basicConfig(
     level=logging.INFO,
