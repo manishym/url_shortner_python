@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""End-to-end tests for URL shortener service using Docker network."""
+"""End-to-end tests for URL shortener service."""
+import os
 import time
 
 import httpx
 
 
-BASE_URL = "http://gateway:80"
+BASE_URL = os.environ.get("E2E_BASE_URL", "http://gateway:80")
 TIMEOUT = 10.0
 
 
