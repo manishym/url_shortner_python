@@ -127,6 +127,16 @@
       gap: 0.75rem;
       flex-wrap: wrap;
     }
+    .result-row + .result-row {
+      margin-top: 0.75rem;
+    }
+    .result-label {
+      color: var(--text-muted);
+      font-size: 0.8rem;
+    }
+    .result-value {
+      font-size: 0.8rem;
+    }
     .short-url {
       font-family: "JetBrains Mono", monospace;
       font-size: 0.95rem;
@@ -179,9 +189,9 @@
           <span class="short-url" id="short-url-display"></span>
           <button type="button" class="btn-ghost copy-btn" id="copy-btn">Copy</button>
         </div>
-        <div class="result-row" style="margin-top: 0.75rem;">
-          <span style="color: var(--text-muted); font-size: 0.8rem;">Delete key:</span>
-          <span class="short-url" id="delete-key-display" style="font-size: 0.8rem;"></span>
+        <div class="result-row">
+          <span class="result-label">Delete key:</span>
+          <span class="short-url result-value" id="delete-key-display"></span>
           <button type="button" class="btn-ghost copy-btn" id="copy-key-btn">Copy Key</button>
         </div>
       </div>
@@ -215,6 +225,11 @@
     }
     function hideMessage(elId) {
       document.getElementById(elId).classList.add('hidden');
+    }
+    function animateCopied(button) {
+      const orig = button.textContent;
+      button.textContent = 'Copied!';
+      setTimeout(() => { button.textContent = orig; }, 2000);
     }
 
     document.getElementById('shorten-btn').addEventListener('click', async () => {
@@ -253,8 +268,14 @@
         lastShortPath = data.short_path;
         lastDeleteKey = data.delete_key;
         const shortFull = base + '/r/' + data.short_path;
-        document.getElementById('short-url-display').innerHTML =
-          '<a href="' + shortFull + '" target="_blank" rel="noopener">' + shortFull + '</a>';
+        const displayEl = document.getElementById('short-url-display');
+        displayEl.replaceChildren();
+        const linkEl = document.createElement('a');
+        linkEl.href = shortFull;
+        linkEl.target = '_blank';
+        linkEl.rel = 'noopener';
+        linkEl.textContent = shortFull;
+        displayEl.appendChild(linkEl);
         document.getElementById('delete-key-display').textContent = data.delete_key;
         document.getElementById('shorten-result').classList.remove('hidden');
         document.getElementById('delete-path').value = data.short_path;
@@ -273,20 +294,14 @@
       if (!link) return;
       const url = link.href;
       navigator.clipboard.writeText(url).then(() => {
-        const btn = document.getElementById('copy-btn');
-        const orig = btn.textContent;
-        btn.textContent = 'Copied!';
-        setTimeout(() => { btn.textContent = orig; }, 2000);
+        animateCopied(document.getElementById('copy-btn'));
       });
     });
 
     document.getElementById('copy-key-btn').addEventListener('click', () => {
       if (!lastDeleteKey) return;
       navigator.clipboard.writeText(lastDeleteKey).then(() => {
-        const btn = document.getElementById('copy-key-btn');
-        const orig = btn.textContent;
-        btn.textContent = 'Copied!';
-        setTimeout(() => { btn.textContent = orig; }, 2000);
+        animateCopied(document.getElementById('copy-key-btn'));
       });
     });
 
