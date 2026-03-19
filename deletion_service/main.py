@@ -1,18 +1,16 @@
 """
 URL Deletion Service - Handles DELETE /r/{short_path}
 """
-import secrets
 import logging
 import threading
 from contextlib import asynccontextmanager
 
-import psycopg2
-import redis.exceptions
-from fastapi import FastAPI, HTTPException, Query
+from confluent_kafka import Consumer
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 from redis import Redis
 
-from shared import config, db, kafka_consumer, kafka_utils
-from shared.kafka_consumer import ConsumerConfig
+from shared import config, db, kafka_utils
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,148 +20,117 @@ logger = logging.getLogger(__name__)
 LOG_PREFIX = "[DELETION-SERVICE]"
 
 
-def _purge_db_action(key: str) -> bool:
-    """Delete *key* from Postgres.  Returns True on success (commit)."""
-    try:
-        with db.get_pg() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "DELETE FROM short_urls WHERE short_path = %s",
-                    (key,),
-                )
-                conn.commit()
-        logger.info("%s DB deleted: %s", LOG_PREFIX, key)
-        return True
-    except psycopg2.Error as e:
-        logger.warning(
-            "%s DB delete failed for %s: %s", LOG_PREFIX, key, e,
-        )
-        return False
+# --- Globals ---
+redis_client: Redis | None = None
+consumer_threads: list[threading.Thread] = []
+consumer_stop = threading.Event()
 
 
-def _purge_redis_action(redis_client: Redis | None, key: str) -> bool:
-    """Delete *key* from Redis.  Returns True on success (commit)."""
-    if not redis_client:
-        return False
-    try:
-        redis_client.delete(key)
-        logger.info("%s Redis deleted: %s", LOG_PREFIX, key)
-        return True
-    except redis.exceptions.RedisError as e:
-        logger.warning(
-            "%s Redis delete failed for %s: %s", LOG_PREFIX, key, e,
-        )
-        return False
-
-
-def _run_purge_consumer_db(consumer_stop: threading.Event):
+def _run_purge_consumer_db():
     """Consumer group: on purge message -> delete from Postgres."""
-    kafka_consumer.run_consumer(ConsumerConfig(
-        group_id="url-deletion-purge-db",
-        consumer_stop=consumer_stop,
-        action_callback=_purge_db_action,
-        log_prefix=LOG_PREFIX,
-        consumer_label="DB",
-        logger=logger,
-    ))
+    conf = {
+        "bootstrap.servers": config.KAFKA_BOOTSTRAP,
+        "group.id": "url-deletion-purge-db",
+        "auto.offset.reset": "earliest",
+    }
+    consumer = Consumer(conf)
+    consumer.subscribe([config.PURGE_TOPIC])
+    logger.info("%s DB purge consumer started, topic=%s", LOG_PREFIX, config.PURGE_TOPIC)
+    while not consumer_stop.is_set():
+        msg = consumer.poll(timeout=1.0)
+        if msg is None:
+            continue
+        if msg.error():
+            logger.warning("%s DB consumer error: %s", LOG_PREFIX, msg.error())
+            continue
+        key = kafka_utils._short_path_from_message(msg)
+        if not key:
+            continue
+        try:
+            with db.get_pg() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM short_urls WHERE short_path = %s", (key,))
+                    conn.commit()
+            logger.info("%s DB deleted: %s", LOG_PREFIX, key)
+            try:
+                consumer.commit(message=msg)
+            except Exception as ce:
+                logger.warning("%s DB commit failed for %s: %s", LOG_PREFIX, key, ce)
+        except Exception as e:
+            logger.warning("%s DB delete failed for %s: %s", LOG_PREFIX, key, e)
+    consumer.close()
 
 
-def _run_purge_consumer_redis(
-    consumer_stop: threading.Event, redis_client: Redis | None
-):
+def _run_purge_consumer_redis():
     """Consumer group: on purge message -> delete from Redis."""
-    def redis_callback(key: str) -> bool:
-        return _purge_redis_action(redis_client, key)
-
-    kafka_consumer.run_consumer(ConsumerConfig(
-        group_id="url-deletion-purge-redis",
-        consumer_stop=consumer_stop,
-        action_callback=redis_callback,
-        log_prefix=LOG_PREFIX,
-        consumer_label="Redis",
-        logger=logger,
-    ))
+    global redis_client
+    conf = {
+        "bootstrap.servers": config.KAFKA_BOOTSTRAP,
+        "group.id": "url-deletion-purge-redis",
+        "auto.offset.reset": "earliest",
+    }
+    consumer = Consumer(conf)
+    consumer.subscribe([config.PURGE_TOPIC])
+    logger.info("%s Redis purge consumer started, topic=%s", LOG_PREFIX, config.PURGE_TOPIC)
+    while not consumer_stop.is_set():
+        msg = consumer.poll(timeout=1.0)
+        if msg is None:
+            continue
+        if msg.error():
+            logger.warning("%s Redis consumer error: %s", LOG_PREFIX, msg.error())
+            continue
+        key = kafka_utils._short_path_from_message(msg)
+        if not key:
+            continue
+        if redis_client:
+            try:
+                redis_client.delete(key)
+                logger.info("%s Redis deleted: %s", LOG_PREFIX, key)
+                try:
+                    consumer.commit(message=msg)
+                except Exception as ce:
+                    logger.warning("%s Redis commit failed for %s: %s", LOG_PREFIX, key, ce)
+            except Exception as e:
+                logger.warning("%s Redis delete failed for %s: %s", LOG_PREFIX, key, e)
+    consumer.close()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize DB, Redis, Kafka topic, and start consumers."""
+    global redis_client, consumer_threads
     db.init_db()
-    app.state.redis = Redis.from_url(config.REDIS_URL)
-    app.state.consumer_stop = threading.Event()
+    redis_client = Redis.from_url(config.REDIS_URL)
     kafka_utils.ensure_purge_topic()
     consumer_threads = [
-        threading.Thread(
-            target=_run_purge_consumer_db,
-            args=(app.state.consumer_stop,),
-            daemon=True,
-        ),
-        threading.Thread(
-            target=_run_purge_consumer_redis,
-            args=(app.state.consumer_stop, app.state.redis),
-            daemon=True,
-        ),
+        threading.Thread(target=_run_purge_consumer_db, daemon=True),
+        threading.Thread(target=_run_purge_consumer_redis, daemon=True),
     ]
-    for thread in consumer_threads:
-        thread.start()
-    app.state.consumer_threads = consumer_threads
+    for t in consumer_threads:
+        t.start()
     yield
-    app.state.consumer_stop.set()
-    for thread in consumer_threads:
-        thread.join(timeout=5)
-    if app.state.redis:
-        app.state.redis.close()
+    consumer_stop.set()
+    for t in consumer_threads:
+        t.join(timeout=5)
+    if redis_client:
+        redis_client.close()
 
 
-app = FastAPI(
-    title="URL Deletion Service", version="1.0.0", lifespan=lifespan,
-)
+app = FastAPI(title="URL Deletion Service", version="1.0.0", lifespan=lifespan)
 
 
 @app.delete("/r/{short_path}")
-def delete_short_url(
-    short_path: str,
-    delete_key: str | None = Query(
-        None, description="Delete key required for deletion",
-    ),
-):
-    """Produce purge event to Kafka; DB and Redis consumers do deletes."""
-    if delete_key is None:
-        raise HTTPException(
-            status_code=403, detail="Delete key is required",
-        )
+def delete_short_url(short_path: str):
+    """Produce purge event to Kafka only; DB and Redis consumers perform the deletes."""
     with db.get_pg() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT delete_key FROM short_urls "
-                "WHERE short_path = %s",
-                (short_path,),
-            )
-            row = cur.fetchone()
-            if row is None:
-                raise HTTPException(
-                    status_code=404, detail="Short URL not found",
-                )
-            stored_delete_key = row[0]
-            if stored_delete_key is None or not secrets.compare_digest(stored_delete_key, delete_key):
-                raise HTTPException(
-                    status_code=403, detail="Invalid delete key",
-                )
+            cur.execute("SELECT 1 FROM short_urls WHERE short_path = %s", (short_path,))
+            if cur.fetchone() is None:
+                raise HTTPException(status_code=404, detail="Short URL not found")
     kafka_utils.send_purge_event(short_path)
-    logger.info(
-        "%s Purge event produced for: %s", LOG_PREFIX, short_path,
-    )
-    return {
-        "ok": True,
-        "short_path": short_path,
-        "message": (
-            "Purge event sent; DB and Redis will be "
-            "updated by consumers"
-        ),
-    }
+    logger.info("%s Purge event produced for: %s", LOG_PREFIX, short_path)
+    return {"ok": True, "short_path": short_path, "message": "Purge event sent; DB and Redis will be updated by consumers"}
 
 
 @app.get("/health")
 def health():
-    """Return health status of the deletion service."""
     return {"status": "ok", "service": "deletion"}

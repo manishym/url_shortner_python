@@ -6,7 +6,3 @@ omit = tests/*
 precision = 2
 show_missing = True
 fail_under = 85
-exclude_lines =
-    pragma: no cover
-    def _purge_
-    def _run_purge_

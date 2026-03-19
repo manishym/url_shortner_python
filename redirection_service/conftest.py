@@ -1,16 +1,14 @@
-"""Pytest fixtures for redirection service tests."""
+"""
+Pytest fixtures for redirection service tests.
+"""
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
-
-from main import app
 
 
 @pytest.fixture
 def mock_pg_conn():
-    """Create a mock postgres connection with cursor."""
     cursor = MagicMock()
     conn = MagicMock()
     conn.__enter__ = MagicMock(return_value=conn)
@@ -26,38 +24,7 @@ def mock_pg_conn():
 
 
 @pytest.fixture
-def mock_redis():
-    """Create a mock Redis client."""
-    mock = MagicMock()
-    mock.get.return_value = None
-    mock.setex.return_value = None
-    mock.close.return_value = None
-    return mock
-
-
-@pytest.fixture
-def mock_lru_cache():
-    """Create a mock LRU cache."""
-    mock = MagicMock()
-    mock.get.return_value = None
-    mock.set.return_value = None
-    mock.delete.return_value = None
-    return mock
-
-
-@pytest.fixture
-def mock_consumer_stop():
-    """Create a mock threading.Event for consumer stop signal."""
-    mock = MagicMock()
-    mock.set = MagicMock()
-    mock.clear = MagicMock()
-    mock.is_set.return_value = False
-    return mock
-
-
-@pytest.fixture
 def mock_get_pg(mock_pg_conn):
-    """Patch shared.db.get_pg to yield a mock connection."""
     conn, _ = mock_pg_conn
 
     @contextmanager
@@ -69,11 +36,37 @@ def mock_get_pg(mock_pg_conn):
 
 
 @pytest.fixture
-def client(mock_get_pg, mock_redis, mock_lru_cache, mock_consumer_stop):
-    """Create TestClient with proper Redis and LRU mocks."""
-    with patch("main.Redis.from_url", return_value=mock_redis):
-        with patch("main.LRUCache", return_value=mock_lru_cache):
-            with patch("main.db.init_db"):
-                with patch("shared.kafka_consumer.Consumer"):
-                    with TestClient(app) as test_client:
-                        yield test_client
+def mock_redis():
+    m = MagicMock()
+    m.get.return_value = None
+    m.setex.return_value = None
+    m.close.return_value = None
+    return m
+
+
+@pytest.fixture
+def mock_lru_cache():
+    return MagicMock()
+
+
+@pytest.fixture
+def noop_consumer():
+    def _noop():
+        pass
+
+    with patch("main._run_purge_consumer_lru", _noop):
+        yield
+
+
+@pytest.fixture
+def client(mock_get_pg, mock_redis, mock_lru_cache, noop_consumer):
+    with patch("main.Redis.from_url", return_value=mock_redis), patch(
+        "main.db.init_db"
+    ), patch("main.LRUCache", return_value=mock_lru_cache):
+        from fastapi.testclient import TestClient
+        from main import app, lru_cache
+        # Inject mock lru_cache into module
+        import main
+        main.lru_cache = mock_lru_cache
+        with TestClient(app) as c:
+            yield c
