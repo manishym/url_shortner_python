@@ -11,14 +11,31 @@ from shared.config import (
     _redis_ttl,
 )
 from shared.db import get_pg, init_db
-from shared.kafka_consumer import run_consumer
-from shared.kafka_utils import (
-    _short_path_from_message,
-    ensure_purge_topic,
-    kafka_producer,
-    send_purge_event,
-)
 from shared.lru_cache import LRUCache
+
+# Lazy imports for kafka components (avoid loading confluent_kafka in services that don't need it)
+def __getattr__(name):
+    if name == "kafka_producer":
+        from shared.kafka_utils import kafka_producer
+        globals()["kafka_producer"] = kafka_producer
+        return kafka_producer
+    elif name == "run_consumer":
+        from shared.kafka_consumer import run_consumer
+        globals()["run_consumer"] = run_consumer
+        return run_consumer
+    elif name == "ensure_purge_topic":
+        from shared.kafka_utils import ensure_purge_topic
+        globals()["ensure_purge_topic"] = ensure_purge_topic
+        return ensure_purge_topic
+    elif name == "send_purge_event":
+        from shared.kafka_utils import send_purge_event
+        globals()["send_purge_event"] = send_purge_event
+        return send_purge_event
+    elif name == "_short_path_from_message":
+        from shared.kafka_utils import _short_path_from_message
+        globals()["_short_path_from_message"] = _short_path_from_message
+        return _short_path_from_message
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     "DATABASE_URL",

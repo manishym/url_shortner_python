@@ -7,37 +7,37 @@ on:
 jobs:
   unit-tests:
     runs-on: ubuntu-latest
-    
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          
+
       - name: Install dependencies
         run: |
           pip install pytest pytest-cov httpx psycopg2-binary redis pydantic confluent-kafka fastapi
-          
+
       - name: Run shortener service tests
         working-directory: shortener_service
         env:
           PYTHONPATH: ..
         run: python -m pytest tests/ -v --cov=main --cov-report=term-missing --cov-fail-under=85
-        
+
       - name: Run redirection service tests
         working-directory: redirection_service
         env:
           PYTHONPATH: ..
         run: python -m pytest tests/ -v --cov=main --cov-report=term-missing --cov-fail-under=80
-        
+
       - name: Run deletion service tests
         working-directory: deletion_service
         env:
           PYTHONPATH: ..
         run: python -m pytest tests/ -v --cov=main --cov-report=term-missing
-        
+
       - name: Post coverage summary
         if: always()
         run: |
@@ -51,3 +51,92 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Deletion Service" >> $GITHUB_STEP_SUMMARY
           cat deletion_service/.coverage 2>/dev/null || echo "No coverage data"
+
+  e2e-tests:
+    runs-on: ubuntu-latest
+    needs: unit-tests
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: shortener
+          POSTGRES_PASSWORD: shortener
+          POSTGRES_DB: shortener
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+      redpanda:
+        image: redpandadata/redpanda:v24.3.5
+        command: redpanda start --smp 1 --memory 1G --reserve-memory 0M --overprovisioned --node-id 0 --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092 --advertise-kafka-addr internal://localhost:9092,external://localhost:19092
+        ports:
+          - 19092:19092
+          - 9092:9092
+        options: >-
+          --health-cmd rpk cluster health
+          --health-interval 15s
+          --health-timeout 5s
+          --health-retries 5
+          --health-start-period 10s
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install e2e test dependencies
+        run: pip install httpx
+
+      - name: Update docker-compose for localhost
+        run: |
+          sed -i 's/host: postgres/host: localhost/' docker-compose.yml
+          sed -i 's/host: redis/host: localhost/' docker-compose.yml
+          sed -i 's/redpanda:9092/localhost:9092/' docker-compose.yml
+          sed -i 's/redpanda:9092/localhost:9092/g' docker-compose.yml
+
+      - name: Update nginx config for localhost
+        run: |
+          sed -i 's/server shortener-service:8000;/server host.docker.internal:8001;/' gateway/nginx.conf
+          sed -i 's/server redirection-service:8000;/server host.docker.internal:8002;/' gateway/nginx.conf
+          sed -i 's/server deletion-service:8000;/server host.docker.internal:8003;/' gateway/nginx.conf
+
+      - name: Build services
+        run: docker compose up -d --build
+
+      - name: Wait for services to be healthy
+        run: |
+          echo "Waiting for services to be healthy..."
+          sleep 30
+          for i in {1..30}; do
+            if curl -sf http://localhost:8080/health > /dev/null 2>&1; then
+              echo "Gateway is healthy"
+              exit 0
+            fi
+            echo "Waiting... ($i/30)"
+            sleep 5
+          done
+          echo "Services failed to become healthy"
+          docker compose logs
+          exit 1
+
+      - name: Run e2e tests
+        run: |
+          python3 e2e_tests/test_e2e.py
