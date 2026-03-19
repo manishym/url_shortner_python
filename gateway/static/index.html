@@ -193,9 +193,9 @@
       <h2>Shorten a URL</h2>
       <label for="long-url">Paste your long URL</label>
       <input type="url" id="long-url" placeholder="https://example.com/very/long/path" />
-      <label for="expires-in">Expiry (optional)</label>
-      <input type="number" id="expires-in" placeholder="Seconds until link expires (e.g. 60, 300); leave empty for no expiry" min="1" aria-describedby="expires-hint" />
-      <p id="expires-hint" class="field-hint">Leave empty for no expiry. If set, link stops working after this many seconds (max cache 5 min).</p>
+      <label for="expires-at">Expires at (optional)</label>
+      <input type="datetime-local" id="expires-at" />
+      <p id="expires-hint" class="field-hint">Leave empty for no expiry. Select a date/time to set when the link expires.</p>
       <button type="button" class="btn-primary" id="shorten-btn">Shorten</button>
       <div id="shorten-message" class="message hidden"></div>
       <div id="shorten-result" class="result hidden">
@@ -262,11 +262,13 @@
       const btn = document.getElementById('shorten-btn');
       btn.disabled = true;
       btn.textContent = 'Shortening…';
-      const expiresVal = document.getElementById('expires-in').value.trim();
+      const expiresInput = document.getElementById('expires-at');
       const body = { long_url: url };
-      if (expiresVal) {
-        const sec = parseInt(expiresVal, 10);
-        if (!isNaN(sec) && sec > 0) body.expires_in_seconds = sec;
+      if (expiresInput.value) {
+        const expiresDate = new Date(expiresInput.value);
+        const now = new Date();
+        const seconds = Math.floor((expiresDate - now) / 1000);
+        if (seconds > 0) body.expires_in_seconds = seconds;
       }
       try {
         const res = await fetch(base + '/shorten', {
