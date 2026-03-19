@@ -6,16 +6,39 @@ on:
       - main
 
 jobs:
-  deploy:
+  test:
     runs-on: [self-hosted, deploy]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Pull latest images
+      - name: Build and start services
+        run: docker compose up -d --build
+
+      - name: Wait for services to be healthy
         run: |
-          docker compose pull
+          echo "Waiting for services to be healthy..."
+          for i in {1..60}; do
+            if docker compose exec -T gateway wget -q -O- http://127.0.0.1/health 2>/dev/null | grep -q "ok"; then
+              echo "Services are healthy"
+              exit 0
+            fi
+            echo "Waiting... ($i/60)"
+            sleep 5
+          done
+          echo "Services failed to become healthy"
+          docker compose logs
+          exit 1
+
+      - name: Run e2e tests
+        run: docker compose --profile test up --abort-on-container-exit e2e-tests
+
+  deploy:
+    needs: test
+    runs-on: [self-hosted, deploy]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Restart services
-        run: |
-          docker compose up -d --build
+        run: docker compose up -d --build
