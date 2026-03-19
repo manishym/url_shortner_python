@@ -311,14 +311,14 @@
       const url = link.href;
       navigator.clipboard.writeText(url).then(() => {
         animateCopied(document.getElementById('copy-btn'));
-      });
+      }).catch(err => console.error('Failed to copy URL:', err));
     });
 
     document.getElementById('copy-key-btn').addEventListener('click', () => {
       if (!lastDeleteKey) return;
       navigator.clipboard.writeText(lastDeleteKey).then(() => {
         animateCopied(document.getElementById('copy-key-btn'));
-      });
+      }).catch(err => console.error('Failed to copy delete key:', err));
     });
 
     document.getElementById('delete-btn').addEventListener('click', async () => {
