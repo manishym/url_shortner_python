@@ -137,10 +137,20 @@ services:
       - redirection-service
       - deletion-service
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
+
+  e2e-tests:
+    build:
+      context: .
+      dockerfile: e2e_tests/Dockerfile
+    depends_on:
+      gateway:
+        condition: service_healthy
+    profiles:
+      - test  # Only runs with: docker compose --profile test up
 
 volumes:
   postgres_data:
