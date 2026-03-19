@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>URL Shortener — Demo</title>
+  <link rel="icon" type="image/png" href="/zql.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -35,11 +36,21 @@
       width: 100%;
       max-width: 520px;
     }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 0.25rem;
+    }
+    .header img {
+      height: 48px;
+      width: auto;
+    }
     h1 {
       font-size: 1.75rem;
       font-weight: 700;
       letter-spacing: -0.02em;
-      margin-bottom: 0.25rem;
+      margin: 0;
     }
     .subtitle {
       color: var(--text-muted);
@@ -127,6 +138,16 @@
       gap: 0.75rem;
       flex-wrap: wrap;
     }
+    .result-row + .result-row {
+      margin-top: 0.75rem;
+    }
+    .result-label {
+      color: var(--text-muted);
+      font-size: 0.8rem;
+    }
+    .result-value {
+      font-size: 0.8rem;
+    }
     .short-url {
       font-family: "JetBrains Mono", monospace;
       font-size: 0.95rem;
@@ -162,22 +183,30 @@
 </head>
 <body>
   <div class="container">
-    <h1>URL Shortener</h1>
+    <div class="header">
+      <img src="/zql.png" alt="zql.app logo" />
+      <h1>URL Shortener</h1>
+    </div>
     <p class="subtitle">Distributed demo — Snowflake IDs, Redis, Postgres, Redpanda</p>
 
     <div class="card">
       <h2>Shorten a URL</h2>
       <label for="long-url">Paste your long URL</label>
       <input type="url" id="long-url" placeholder="https://example.com/very/long/path" />
-      <label for="expires-in">Expiry (optional)</label>
-      <input type="number" id="expires-in" placeholder="Seconds until link expires (e.g. 60, 300); leave empty for no expiry" min="1" aria-describedby="expires-hint" />
-      <p id="expires-hint" class="field-hint">Leave empty for no expiry. If set, link stops working after this many seconds (max cache 5 min).</p>
+      <label for="expires-at">Expires at (optional)</label>
+      <input type="datetime-local" id="expires-at" />
+      <p id="expires-hint" class="field-hint">Leave empty for no expiry. Select a date/time to set when the link expires.</p>
       <button type="button" class="btn-primary" id="shorten-btn">Shorten</button>
       <div id="shorten-message" class="message hidden"></div>
       <div id="shorten-result" class="result hidden">
         <div class="result-row">
           <span class="short-url" id="short-url-display"></span>
           <button type="button" class="btn-ghost copy-btn" id="copy-btn">Copy</button>
+        </div>
+        <div class="result-row">
+          <span class="result-label">Delete key:</span>
+          <span class="short-url result-value" id="delete-key-display"></span>
+          <button type="button" class="btn-ghost copy-btn" id="copy-key-btn">Copy Key</button>
         </div>
       </div>
     </div>
@@ -186,6 +215,8 @@
       <h2>Delete a short link</h2>
       <label for="delete-path">Short code (e.g. abc1234)</label>
       <input type="text" id="delete-path" placeholder="abc1234" />
+      <label for="delete-key">Delete key</label>
+      <input type="text" id="delete-key" placeholder="Delete key from shorten response" />
       <button type="button" class="btn-danger" id="delete-btn">Delete</button>
       <div id="delete-message" class="message hidden"></div>
     </div>
@@ -197,6 +228,8 @@
 
   <script>
     const base = window.location.origin;
+    let lastShortPath = '';
+    let lastDeleteKey = '';
 
     function showMessage(elId, text, type) {
       const el = document.getElementById(elId);
@@ -206,6 +239,11 @@
     }
     function hideMessage(elId) {
       document.getElementById(elId).classList.add('hidden');
+    }
+    function animateCopied(button) {
+      const orig = button.textContent;
+      button.textContent = 'Copied!';
+      setTimeout(() => { button.textContent = orig; }, 2000);
     }
 
     document.getElementById('shorten-btn').addEventListener('click', async () => {
@@ -224,11 +262,13 @@
       const btn = document.getElementById('shorten-btn');
       btn.disabled = true;
       btn.textContent = 'Shortening…';
-      const expiresVal = document.getElementById('expires-in').value.trim();
+      const expiresInput = document.getElementById('expires-at');
       const body = { long_url: url };
-      if (expiresVal) {
-        const sec = parseInt(expiresVal, 10);
-        if (!isNaN(sec) && sec > 0) body.expires_in_seconds = sec;
+      if (expiresInput.value) {
+        const expiresDate = new Date(expiresInput.value);
+        const now = new Date();
+        const seconds = Math.floor((expiresDate - now) / 1000);
+        if (seconds > 0) body.expires_in_seconds = seconds;
       }
       try {
         const res = await fetch(base + '/shorten', {
@@ -241,11 +281,22 @@
           showMessage('shorten-message', data.detail || data.error || 'Failed to shorten', 'error');
           return;
         }
+        lastShortPath = data.short_path;
+        lastDeleteKey = data.delete_key;
         const shortFull = base + '/r/' + data.short_path;
-        document.getElementById('short-url-display').innerHTML =
-          '<a href="' + shortFull + '" target="_blank" rel="noopener">' + shortFull + '</a>';
+        const displayEl = document.getElementById('short-url-display');
+        displayEl.replaceChildren();
+        const linkEl = document.createElement('a');
+        linkEl.href = shortFull;
+        linkEl.target = '_blank';
+        linkEl.rel = 'noopener';
+        linkEl.textContent = shortFull;
+        displayEl.appendChild(linkEl);
+        document.getElementById('delete-key-display').textContent = data.delete_key;
         document.getElementById('shorten-result').classList.remove('hidden');
-        showMessage('shorten-message', 'Created. Click the link or Copy to try redirect.', 'success');
+        document.getElementById('delete-path').value = data.short_path;
+        document.getElementById('delete-key').value = data.delete_key;
+        showMessage('shorten-message', 'Created. Save the delete key to delete this link.', 'success');
       } catch (e) {
         showMessage('shorten-message', 'Network error: ' + e.message, 'error');
       } finally {
@@ -259,22 +310,31 @@
       if (!link) return;
       const url = link.href;
       navigator.clipboard.writeText(url).then(() => {
-        const btn = document.getElementById('copy-btn');
-        const orig = btn.textContent;
-        btn.textContent = 'Copied!';
-        setTimeout(() => { btn.textContent = orig; }, 2000);
-      });
+        animateCopied(document.getElementById('copy-btn'));
+      }).catch(err => console.error('Failed to copy URL:', err));
+    });
+
+    document.getElementById('copy-key-btn').addEventListener('click', () => {
+      if (!lastDeleteKey) return;
+      navigator.clipboard.writeText(lastDeleteKey).then(() => {
+        animateCopied(document.getElementById('copy-key-btn'));
+      }).catch(err => console.error('Failed to copy delete key:', err));
     });
 
     document.getElementById('delete-btn').addEventListener('click', async () => {
       const path = (document.getElementById('delete-path').value || '').trim().replace(/^\/r\//, '').split('/')[0];
+      const key = (document.getElementById('delete-key').value || '').trim();
       if (!path) {
         showMessage('delete-message', 'Enter a short code to delete.', 'error');
         return;
       }
+      if (!key) {
+        showMessage('delete-message', 'Enter the delete key.', 'error');
+        return;
+      }
       hideMessage('delete-message');
       try {
-        const res = await fetch(base + '/r/' + encodeURIComponent(path), { method: 'DELETE' });
+        const res = await fetch(base + '/r/' + encodeURIComponent(path) + '?delete_key=' + encodeURIComponent(key), { method: 'DELETE' });
         const data = await res.json();
         if (!res.ok) {
           showMessage('delete-message', data.detail || 'Delete failed', 'error');
@@ -282,6 +342,9 @@
         }
         showMessage('delete-message', 'Deleted: ' + path + ' (cache purged via Redpanda)', 'success');
         document.getElementById('delete-path').value = '';
+        document.getElementById('delete-key').value = '';
+        lastShortPath = '';
+        lastDeleteKey = '';
       } catch (e) {
         showMessage('delete-message', 'Network error: ' + e.message, 'error');
       }
