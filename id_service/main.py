@@ -7,6 +7,7 @@ import logging
 import os
 import time
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,7 +24,7 @@ MAX_WORKER_ID = (1 << 10) - 1  # 1023
 MAX_SEQUENCE = (1 << 12) - 1   # 4095
 CLOCK_DRIFT_MAX_WAIT_MS = 5000  # Max wait for clock to catch up
 
-if not (0 <= WORKER_ID <= MAX_WORKER_ID):
+if not 0 <= WORKER_ID <= MAX_WORKER_ID:
     raise ValueError(f"WORKER_ID must be 0..{MAX_WORKER_ID}, got {WORKER_ID}")
 
 _app_state = {"sequence": 0, "last_timestamp_ms": -1}
@@ -46,7 +47,10 @@ def generate_snowflake_id() -> int | None:
         logger.warning("%s Clock drift detected: now=%s < last=%s", LOG_PREFIX, now_ms, last_ms)
         wait_until_ms = last_ms - now_ms
         if wait_until_ms > CLOCK_DRIFT_MAX_WAIT_MS:
-            logger.error("%s Clock drift too large (%s ms), refusing to generate", LOG_PREFIX, wait_until_ms)
+            logger.error(
+                "%s Clock drift too large (%s ms), refusing to generate",
+                LOG_PREFIX, wait_until_ms,
+            )
             return None
         deadline_ms = now_ms + CLOCK_DRIFT_MAX_WAIT_MS
         while True:
@@ -82,8 +86,9 @@ def get_generate():
     """Return a single 64-bit Snowflake ID as integer."""
     sid = generate_snowflake_id()
     if sid is None:
-        logger.error("%s Failed to generate ID (clock drift)", LOG_PREFIX)
-        from fastapi.responses import JSONResponse
+        logger.error(
+            "%s Failed to generate ID (clock drift)", LOG_PREFIX,
+        )
         return JSONResponse(
             status_code=503,
             content={"error": "Clock drift protection: could not generate ID"},
